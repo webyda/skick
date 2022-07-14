@@ -31,7 +31,7 @@ class Actor:
         self._actions = {}
 
         self._message_task = None
-        self._mailman_task = None
+        self._mailman_cleanup = None
         self._message_system = message_system
 
     async def _process_messages(self) -> None:
@@ -70,8 +70,8 @@ class Actor:
         actor. This relies on an abstraction of a messaging system which must
         be provided on instantiation.
         """
-        return await self._message_system.mailman(self)
-
+        self._mailman_cleanup = await self._message_system.mailman(self)
+        
     async def send(self, address: str, message: dict) -> None:
         """
         This method allows the actor to send messages to other actors. It
@@ -93,8 +93,8 @@ class Actor:
 
     async def stop(self) -> None:
         """ Kills the actor and cleans up """
-        if self._mailman_task:
-            self._mailman_task.cancel()
+        if self._mailman_cleanup:
+            await self._mailman_cleanup()
 
         if self._message_task:
             self._message_task.cancel()
