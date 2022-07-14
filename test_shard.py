@@ -4,26 +4,29 @@ Tests the shard module's Shard pseudo-class and ensures it can handle actors
 
 import asyncio
 from inspect import getclosurevars
+from typing import Callable, Awaitable
 
 import pytest
 
-from actor import AbstractActor
+from message_system_interface import MessageSystemInterface
+from actor import Actor
 from shard import Shard
 
-class MockActor(AbstractActor):
-    """ A concrete mock actor type suitable for the tests in this suite. """
-    async def mailman(self):
-        pass  # This mock actor receives messages through direct insertion
-    
+class MockMessage(MessageSystemInterface):
+    """ The tests will not use the messaging system """
+    async def mailman(self, actor):
+        pass
     async def send(self, address, message):
-        pass  # This actor will not send messages in the usual sense
+        pass
     
-        
+def MockFactory():
+    """ Generates a fake message_system which does nothing. """
+    return MockMessage()
 
 def test_shard():
     loop = asyncio.get_event_loop()
     async def test():
-        my_shard = Shard(MockActor, "my_shard")
+        my_shard = Shard(Actor, MockFactory, "my_shard")
         
         @my_shard.actor("spawner")
         async def spawner(inst, message):

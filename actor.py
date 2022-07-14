@@ -1,38 +1,40 @@
+"""
+Contains a base Actor class, being the fundamental object of actor models.
+"""
 import asyncio
-from abc import ABC, abstractmethod
-from secrets import token_urlsafe
+from typing import Callable, Awaitable, Dict
 
-class AbstractActor(ABC):
+from message_system_interface import MessageSystemInterface
+
+class Actor:
     """
-    An abstract base class for actors in the Skick library.
+    A class for actors in the Skick library.
+
+    The actor can receive and send messages through a messaging system which
+    must be provided through an abstraction called a MessageSystemInterface.
     
-    It requires concrete implementations that deliver messages to the queue and
-    that can dispatch messages to external actors.
+    After instantiation, actors are built with factory functions that supply
+    them with *actions* which are async functions that process messages.
     
-    The actor is instantiated by the use of a factory function that
-    declaratively adds a number of message handlers. The handlers, called
-    actions, share a closure which contains the actual body of the actor. The
-    actions may either alter the state of the closure, send a message to a
-    different actor, create new actors, or perform a "replacement", that is,
-    replacing the current actions and creating a new closure for the new
-    actions.
-    
-    Replacement being a comparatively complicated and slow operation, the
-    preferred method of state management is simply to directly alter the state
-    of the inner closure (something which is not considered in Agha due to
-    theoretical constraints). This is essentially equivalent to replacement, but
-    is more convenient from the programmer's standpoint in many cases.
+    Typically, these share common state through sharing a closure.
+    This allows us to directly alter their state in message handlers without
+    actually using the replacement mechanism, but also enables a very simple
+    replacement mechanism in which the methods in question are simply
+    forgotten, resulting in their closure being garbage collected.
     """
-    def __init__(self, name, queue_size=100):
+    def __init__(self, name: str,
+                 message_system: MessageSystemInterface = None,
+                 queue_size: int=100) -> None:
         self.name = name
         self.queue = asyncio.Queue(queue_size)
         self.loop = asyncio.get_event_loop()
         self._actions = {}
-        
+
         self._message_task = None
         self._mailman_task = None
-        
-    async def _process_messages(self):
+        self._message_system = message_system
+
+    async def _process_messages(self) -> None:
         """
         Consumes incoming messages from the internal queue and activates the
         appropriate handler.
@@ -44,16 +46,16 @@ class AbstractActor(ABC):
             else:
                 pass
 
-    
-    def action(self, name):
+    def action(self, name: str) -> Callable[[Callable[[Dict], Awaitable[None]]], Callable[[dict],Awaitable[None]]]:
         """ Adds a regular action to the actor. """
         def decorator(func):
             self._actions[name] = func
             return func
         return decorator
 
-    
-    async def replace(self, factory, message):
+    async def replace(self,
+                      factory: Callable[["Actor", dict], Awaitable[None]],
+                      message: dict) -> None:
         """
         Replaces the current actor's behaviors with another. Also replaces
         the state encapsulating closure. It does this by running the factory
@@ -61,41 +63,38 @@ class AbstractActor(ABC):
         """
         self._actions.clear()
         await factory(self, message)
-    
-    
-    @abstractmethod
-    async def mailman(self):
+
+    async def mailman(self) -> None:
         """
         This method is meant to attach some method of receiving messages to the
-        actor. Concrete subclasses must implement this so that it receives
-        messages using some sort of concrete mechanism like RabbitMQ, Kafka,
-        or some other message queue, and then delivering them to the actor's
-        internal queue. This serparates concerns and inverts dependencies.
+        actor. This relies on an abstraction of a messaging system which must
+        be provided on instantiation.
         """
-        pass
+        return await self._message_system.mailman(self)
 
-
-    @abstractmethod
-    async def send(self, address, message):
+    async def send(self, address: str, message: dict) -> None:
         """
-        This method allows the actor to send messages to other actors. It must
-        be adapted to some concrete message propagation mechanism to work, and
-        this mechanism may depend on the shard, the recipient and all manner of
-        other things.
+        This method allows the actor to send messages to other actors. It
+        relies on an abstraction of a messaging system which must be injected
+        on instantiation.
         """
-        pass
+        await self._message_system.send(address, message)
 
+    async def run(self) -> None:
+        """
+        Runs the tasks associated with the actor. Since we can not use regular
+        abstract base classes, we need to instead perform runtime checks to
+        ensure that the actor is properly initialized.
+        """
 
-    async def run(self):
-        """ Runs the tasks associated with the actor """
         await self.mailman()
-        
+
         self._message_task = self.loop.create_task(self._process_messages())
 
-
-    async def stop(self):
+    async def stop(self) -> None:
         """ Kills the actor and cleans up """
         if self._mailman_task:
             self._mailman_task.cancel()
-        
-        self._message_task.cancel()
+
+        if self._message_task:
+            self._message_task.cancel()
