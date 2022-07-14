@@ -5,7 +5,7 @@ they must be able to communicate with actors.
 import asyncio
 from abc import ABC, abstractmethod
 from typing import Any
-#from actor import Actor
+
 
 class MessageSystemInterface(ABC):
     """ Interface for message systems """
@@ -17,7 +17,6 @@ class MessageSystemInterface(ABC):
         which receives messages asynchronously but in turn, and subsequently
         places them in the queue referenced by queue.
         """
-        pass
 
     @abstractmethod
     async def send(self, address: str, message: dict) -> None:
@@ -25,8 +24,8 @@ class MessageSystemInterface(ABC):
         This method must provide a means to send a message to the actor at the
         address specified.
         """
-        pass
-    
+
+
 class MessageSystemFactory(ABC):
     """
     This abstract class provides an interface for setting up stable
@@ -38,8 +37,6 @@ class MessageSystemFactory(ABC):
     @abstractmethod
     def __init__(self, config: Any) -> None:
         """ We require an __init__ method with a specific interface """
-        pass
-    
 
     @abstractmethod
     def create(self) -> MessageSystemInterface:
@@ -47,4 +44,3 @@ class MessageSystemFactory(ABC):
         This method must be implemented by concrete subclasses. It must return
         a MessageSystemInterface object.
         """
-        pass

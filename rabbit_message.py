@@ -2,15 +2,17 @@
 This module contains a messaging system implementation that uses RabbitMQ
 """
 import asyncio
-import aio_pika
 import json
+
+import aio_pika
 
 from message_system_interface import MessageSystemInterface, MessageSystemFactory
 
+
 class RabbitFactory(MessageSystemFactory):
     """
-    This class creates a RabbitMQ connection and returns a MessageSystemInterface
-    object.
+    This class creates a RabbitMQ connection and returns a
+    MessageSystemInterface object.
     """
     def __init__(self, config: str) -> None:
         self.connection = aio_pika.RobustConnection(config)
@@ -18,14 +20,15 @@ class RabbitFactory(MessageSystemFactory):
         self.exchange = aio_pika.Exchange(self.connection,
                                           self.channel,
                                           "ActorExchange",
-                                          "direct") 
-         
+                                          "direct")
+
     def create(self) -> MessageSystemInterface:
         """
         Creates a new RabbitMQ connection and returns a MessageSystemInterface
         object.
         """
         return RabbitMessage(self.connection, self.channel, self.exchange)
+
 
 class RabbitMessage(MessageSystemInterface):
     """
@@ -36,7 +39,7 @@ class RabbitMessage(MessageSystemInterface):
         self.channel = channel
         self.exchange = exchange
         self.queue = None
-    
+
     async def ensure_connected(self):
         """
         Provides the asynchronous part of the connection procedure. This would
@@ -45,7 +48,7 @@ class RabbitMessage(MessageSystemInterface):
         creating the connection, channel and exchange objects in synchronous
         contexts.
         """
-        
+
         if not self.connection.connected.is_set():
             # The library author advises against this, but it's necessary if we
             # wish to provide connection details from a synchronous context.
@@ -53,22 +56,23 @@ class RabbitMessage(MessageSystemInterface):
             # the connection object synchronously and await the connect
             # function on the resulting connection object.
             await self.connection.connect()
-            
+
             # Once the connection object has been connected, we have to attach
             # the channel to the connection object asynchronously. Normally
             # this would be done already by the asynchronous Connection.channel
             # method, but we have to do it manually.
             await self.channel.initialize()
-            
+
     async def mailman(self, actor):
         """
         Ensures all queues and exchanges are in order, and then creates a
         consumer for the actor's queue.
         """
         await self.ensure_connected()
-        await self.exchange.declare() # Make sure the exchange is declared
+        await self.exchange.declare()  # Make sure the exchange is declared
         self.queue = await self.channel.declare_queue(actor.name)
         await self.queue.bind(self.exchange, actor.name)
+
         async def consumer(message):
             """
             Decodes the message from JSON to a dictionary and deposits it
@@ -85,7 +89,7 @@ class RabbitMessage(MessageSystemInterface):
             except json.JSONDecodeError:
                 await message.nack()
 
-        await self.queue.consume(consumer, consumer_tag = actor.name)
+        await self.queue.consume(consumer, consumer_tag=actor.name)
 
         async def cleanup():
             await self.queue.cancel(actor.name)
@@ -100,5 +104,4 @@ class RabbitMessage(MessageSystemInterface):
         """
         msg = json.dumps(message).encode()
         msg_object = aio_pika.Message(body=msg)
-        await self.exchange.publish(msg_object, routing_key = address)
-
+        await self.exchange.publish(msg_object, routing_key=address)

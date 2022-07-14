@@ -7,19 +7,21 @@ The instances of the shard actor also serve as decorators with which we
 register child actor factories and associate them with message templates.
 """
 
-import asyncio
 from secrets import token_urlsafe
 from typing import Callable, Type, Awaitable
+
 from message_system_interface import MessageSystemInterface
 from actor import Actor
 
+
 def Shard(actor_base: Type[Actor],
           message_factory: Callable[[], Awaitable[MessageSystemInterface]],
-          shard_id: str=None) -> Actor:
+          shard_id: str = None) -> Actor:
     """
     Takes a concrete actor type and returns an actor
     """
-    shard_actor = actor_base(shard_id if shard_id else token_urlsafe(16), message_factory())
+    shard_actor = actor_base(shard_id if shard_id else token_urlsafe(16),
+                             message_factory())
 
     factories = {}  # This keeps track of all available factory functions
     actors = {}  # This keeps track of all managed actor instances

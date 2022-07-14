@@ -1,3 +1,7 @@
+"""
+Contains unit tests for the Actor class
+"""
+
 import asyncio
 from gc import get_referrers
 import pytest
@@ -36,9 +40,9 @@ def test_actor():
             log.append(item)
 
         actor = Actor("1", message_system=MockMSI(logger, [{"action": "ping",
-                                       "sender": "me",
-                                       "payload": {},
-                                       }]))
+                                                            "sender": "me",
+                                                            "payload": {},
+                                                            }]))
 
         @actor.action("ping")
         async def pinger(message):
@@ -47,7 +51,7 @@ def test_actor():
 
         await actor.run()
         await asyncio.sleep(.5)
-        assert log == [("me", {"action": "reply"})] 
+        assert log == [("me", {"action": "reply"})]
 
         await actor.stop()
     loop.run_until_complete(test())
@@ -64,9 +68,9 @@ def test_replacement():
             log.append(item)
 
         actor = Actor("1", MockMSI(logger, [{"action": "about"},
-                                      {"action": "replace"},
-                                      {"action": "about"},
-                                      ]))
+                                            {"action": "replace"},
+                                            {"action": "about"},
+                                            ]))
 
         first_about = None
         second_about = None
