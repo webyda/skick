@@ -2,9 +2,10 @@
 Contains a base Actor class, being the fundamental object of actor models.
 """
 import asyncio
-from typing import Callable, Awaitable, Dict
+from typing import Callable, Awaitable
 
 from message_system_interface import MessageSystemInterface
+
 
 class Actor:
     """
@@ -12,10 +13,10 @@ class Actor:
 
     The actor can receive and send messages through a messaging system which
     must be provided through an abstraction called a MessageSystemInterface.
-    
+
     After instantiation, actors are built with factory functions that supply
     them with *actions* which are async functions that process messages.
-    
+
     Typically, these share common state through sharing a closure.
     This allows us to directly alter their state in message handlers without
     actually using the replacement mechanism, but also enables a very simple
@@ -24,7 +25,7 @@ class Actor:
     """
     def __init__(self, name: str,
                  message_system: MessageSystemInterface = None,
-                 queue_size: int=100) -> None:
+                 queue_size: int = 100) -> None:
         self.name = name
         self.queue = asyncio.Queue(queue_size)
         self.loop = asyncio.get_event_loop()
@@ -46,7 +47,13 @@ class Actor:
             else:
                 pass
 
-    def action(self, name: str) -> Callable[[Callable[[Dict], Awaitable[None]]], Callable[[dict],Awaitable[None]]]:
+    def action(self, name: str) -> (
+        Callable[
+            [
+                Callable[[dict], Awaitable[None]],
+            ],
+            Callable[[dict], Awaitable[None]]
+            ]):
         """ Adds a regular action to the actor. """
         def decorator(func):
             self._actions[name] = func
@@ -62,7 +69,7 @@ class Actor:
         function of the new actor after having cleared the _actions dict.
         """
         self._actions.clear()
-        await factory(self, message)
+        factory(self, message)
 
     async def mailman(self) -> None:
         """
@@ -71,7 +78,7 @@ class Actor:
         be provided on instantiation.
         """
         self._mailman_cleanup = await self._message_system.mailman(self)
-        
+
     async def send(self, address: str, message: dict) -> None:
         """
         This method allows the actor to send messages to other actors. It

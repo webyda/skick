@@ -75,7 +75,7 @@ def test_replacement():
         first_about = None
         second_about = None
 
-        async def first_state(inst, message):
+        def first_state(inst, message):
             @inst.action("about")
             async def about(message):
                 nonlocal inst
@@ -93,7 +93,7 @@ def test_replacement():
                 nonlocal inst
                 await inst.replace(second_state, message)
 
-        async def second_state(inst, message):
+        def second_state(inst, message):
             @inst.action("about")
             async def about(message):
                 nonlocal inst
@@ -111,7 +111,7 @@ def test_replacement():
                 nonlocal inst
                 await inst.replace(first_state, message)
 
-        await first_state(actor, {})
+        first_state(actor, {})
         await actor.run()
         await asyncio.sleep(1)
         assert len(get_referrers(first_about)) == 1
