@@ -25,10 +25,11 @@ class Actor:
     """
     def __init__(self, name: str,
                  message_system: MessageSystemInterface = None,
-                 queue_size: int = 100) -> None:
+                 queue_size: int = 100,
+                 loop = None) -> None:
         self.name = name
         self.queue = asyncio.Queue(queue_size)
-        self.loop = asyncio.get_event_loop()
+        self.loop = loop or asyncio.get_event_loop()
         self._actions = {}
 
         self._message_task = None
