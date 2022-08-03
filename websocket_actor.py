@@ -65,7 +65,21 @@ class FrontActor(Actor):
             return func
         return decorator
 
-    async def front_action(self, name):
+    def daemon(self, name):
+        """
+        Prevent daemons from running on the front actor by default
+        """
+        def decorator(func):
+            return func
+        return decorator
+    
+    def front_daemon(self, name):
+        """
+        Allows running a daemon specifically on the front actor.
+        """
+        return super().daemon(name)
+     
+    def front_action(self, name):
         """
         In some cases, we may be interested in specifically assigning an action
         to the receptionist actor. In these rare cases, we can invoke this
@@ -155,6 +169,12 @@ class BackActor(Actor):
         """
         Ignore actions meant for the receptionist actor
         """
+        def decorator(func):
+            return func
+        return decorator
+    
+    def front_daemon(self, name):
+        """ Ignores daemons specifically meant to run on the front actor """
         def decorator(func):
             return func
         return decorator

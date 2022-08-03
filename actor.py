@@ -29,8 +29,11 @@ class Actor:
         self.name = name
         self.queue = asyncio.Queue(queue_size)
         self.loop = asyncio.get_event_loop()
-        self._actions = {}
 
+        self._actions = {}
+        self._daemons = {}
+
+        self._daemon_taks = {}
         self._message_task = None
         self._mailman_cleanup = None
         self._message_system = message_system
@@ -59,7 +62,18 @@ class Actor:
             self._actions[name] = func
             return func
         return decorator
-
+    
+    def daemon(self, name):
+        """
+        Registers a daemon that will be launched as a task when the actor
+        starts, and which will be cancelled when the actor stops or is
+        replaced.
+        """
+        def decorator(func):
+            self._daemons[name] = func
+            return func
+        return decorator
+    
     async def replace(self,
                       factory: Callable[["Actor", dict], Awaitable[None]],
                       message: dict) -> None:
@@ -69,6 +83,12 @@ class Actor:
         function of the new actor after having cleared the _actions dict.
         """
         self._actions.clear()
+        
+        for task in self._daemon_tasks.values():
+            task.cancel()    
+        self._daemons.clear()
+        self._daemon_tasks.clear()
+        
         factory(self, message)
 
     async def mailman(self) -> None:
@@ -95,13 +115,18 @@ class Actor:
         """
 
         await self.mailman()
+        self._daemon_tasks = {key: self.loop.create_task(item())
+                              for key, item in self._daemons.items()}
 
         self._message_task = self.loop.create_task(self._process_messages())
 
     async def stop(self) -> None:
         """ Kills the actor and cleans up """
-        if self._mailman_cleanup:
-            await self._mailman_cleanup()
-
         if self._message_task:
             self._message_task.cancel()
+
+        for task in self._daemon_tasks.values():
+            task.cancel()
+
+        if self._mailman_cleanup:
+            await self._mailman_cleanup()
