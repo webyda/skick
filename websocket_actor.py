@@ -22,8 +22,8 @@ from message_system_interface import MessageSystemInterface
 
 class FrontActor(Actor):
     """ A specialized actor class for websocket receptionist actors """
-    def __init__(self, name, message_system=None):
-        super().__init__(name, message_system=message_system)
+    def __init__(self, name, message_system=None, loop=None):
+        super().__init__(name, message_system=message_system, loop=loop)
 
         self._websocket = None
         self.associate = None
@@ -124,7 +124,7 @@ class FrontActor(Actor):
 
     async def run(self):
         await super().run()
-        self._socket_task = asyncio.create_task(self.socklistener())
+        self._socket_task = self.loop.create_task(self.socklistener())
 
     async def stop(self):
         """ Stops the websocket listener """
@@ -139,8 +139,8 @@ class BackActor(Actor):
     system from a websocket. It receives filtered and verified messages from
     a trusted specialized actor, and proceeds to do useful work.
     """
-    def __init__(self, name, message_system=None):
-        super().__init__(name, message_system=message_system)
+    def __init__(self, name, message_system=None, loop=None):
+        super().__init__(name, message_system=message_system, loop=loop)
         self._replacement_factories = {}  # A dictionary used for serializing
         self.associate = None
 
@@ -181,7 +181,7 @@ class BackActor(Actor):
 
 
 def WebsocketActor(socket_interface: WebsocketServerInterface,
-                   messaging_system: Callable[[], MessageSystemInterface]):
+                   messaging_system: Callable[[], MessageSystemInterface], loop=None):
     """ Creates a Websocket Handler Actor. """
     sock = socket_interface
 
@@ -190,7 +190,9 @@ def WebsocketActor(socket_interface: WebsocketServerInterface,
     subsession_types = {}
     reverse_subsessions = {}
 
-    socket_actor = Actor(token_urlsafe(16), message_system=messaging_system())
+    socket_actor = Actor(token_urlsafe(),
+                         message_system=messaging_system(),
+                         loop=loop)
 
     subactors = set()
 
@@ -247,10 +249,12 @@ def WebsocketActor(socket_interface: WebsocketServerInterface,
             # First we instantiate the actors and provide them with some
             # necessary information.
             factory = session_types[handshake]
-            receptionist = FrontActor(token_urlsafe(16),
-                                      message_system=messaging_system())
-            session_actor = BackActor(token_urlsafe(16),
-                                      message_system=messaging_system())
+            receptionist = FrontActor(token_urlsafe(),
+                                      message_system=messaging_system(),
+                                      loop=loop)
+            session_actor = BackActor(token_urlsafe(),
+                                      message_system=messaging_system(),
+                                      loop=loop)
 
             receptionist._replacement_factories = subsession_types
             session_actor._replacement_factories = reverse_subsessions
@@ -268,6 +272,8 @@ def WebsocketActor(socket_interface: WebsocketServerInterface,
             await session_actor.run()
 
             subactors.add((receptionist, session_actor))
+            
+            await asyncio.wait_for(receptionist._socket_task, None)
 
         else:
             await socket.send("denied")
