@@ -30,10 +30,12 @@ def test_rabbit_factory():
         a = factory.create()
         b = factory.create()
         
-        a = await a
-        b = await b
+
+        a = await a.future
+        b = await b.future
         
         for (a,b) in zip(a,b):
+            print(id(a),id(b))
             assert a is b
             
     loop.run_until_complete(test())
