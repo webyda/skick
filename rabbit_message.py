@@ -15,30 +15,37 @@ class RabbitFactory(MessageSystemFactory):
     MessageSystemInterface object.
     """
     def __init__(self, config: str) -> None:
-        self.connection = aio_pika.RobustConnection(config)
+        self.connection = aio_pika.Connection(config)
         self.channel = aio_pika.Channel(self.connection)
-        self.exchange = aio_pika.Exchange(self.connection,
+        self.exchange = aio_pika.Exchange(
                                           self.channel,
                                           "ActorExchange",
                                           "direct")
+        self.broadcast = aio_pika.Exchange(
+                                           self.channel,
+                                           "BroadcastExchange",
+                                           "fanout")
+        
 
     def create(self) -> MessageSystemInterface:
         """
         Creates a new RabbitMQ connection and returns a MessageSystemInterface
         object.
         """
-        return RabbitMessage(self.connection, self.channel, self.exchange)
+        return RabbitMessage(self.connection, self.channel, self.exchange, self.broadcast)
 
 
 class RabbitMessage(MessageSystemInterface):
     """
     This class implements a basic messaging system that uses RabbitMQ.
     """
-    def __init__(self, connection, channel, exchange):
+    def __init__(self, connection, channel, exchange, broadcast):
         self.connection = connection
         self.channel = channel
         self.exchange = exchange
+        self.broadcast_ex = broadcast
         self.queue = None
+        self.address = None
 
     async def ensure_connected(self):
         """
@@ -61,7 +68,7 @@ class RabbitMessage(MessageSystemInterface):
             # the channel to the connection object asynchronously. Normally
             # this would be done already by the asynchronous Connection.channel
             # method, but we have to do it manually.
-            await self.channel.initialize()
+            #await self.channel.initialize()
 
     async def mailman(self, actor):
         """
@@ -70,8 +77,9 @@ class RabbitMessage(MessageSystemInterface):
         """
         await self.ensure_connected()
         await self.exchange.declare()  # Make sure the exchange is declared
-        self.queue = await self.channel.declare_queue(actor.name)
-        await self.queue.bind(self.exchange, actor.name)
+        self.address = actor.address
+        self.queue = await self.channel.declare_queue(self.address)
+        await self.queue.bind(self.exchange, self.address)
 
         async def consumer(message):
             """
@@ -105,3 +113,18 @@ class RabbitMessage(MessageSystemInterface):
         msg = json.dumps(message).encode()
         msg_object = aio_pika.Message(body=msg)
         await self.exchange.publish(msg_object, routing_key=address)
+
+    async def register_shard(self, address):
+        """
+        Registers the shard.
+        """
+        await self.broadcast_ex.declare()
+        await self.queue.bind(self.broadcast_ex, self.address)
+    
+    async def broadcast(self, message):
+        """
+        Broadcasts a message to all shards.
+        """
+        msg = json.dumps(message).encode()
+        msg_object = aio_pika.Message(body=msg)
+        await self.broadcast_ex.publish(msg_object)

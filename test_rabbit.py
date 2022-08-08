@@ -19,15 +19,23 @@ class MockActor:
 
 
 def test_rabbit_factory():
-    """ Tests wheter the rabbit factory works """
+    """
+    Tests wheter the rabbit factory works and the future produces the same
+    references for for different actors.
+    """
     loop = asyncio.get_event_loop()
 
     async def test():
-        factory = rabbit_message.RabbitFactory(LOGIN)
-        assert factory.connection
-        assert factory.channel
-        factory.create()
-
+        factory = rabbit_message.RabbitFactory(LOGIN,loop=loop)
+        a = factory.create()
+        b = factory.create()
+        
+        a = await a
+        b = await b
+        
+        for (a,b) in zip(a,b):
+            assert a is b
+            
     loop.run_until_complete(test())
 
 
@@ -36,10 +44,10 @@ def test_rabbit_message():
     Tests whether messages are actually propagated by the RabbitMQ server
     through the interface that the Rabbit factory generates.
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
 
     async def test():
-        factory = rabbit_message.RabbitFactory(LOGIN)
+        factory = rabbit_message.RabbitFactory(LOGIN,loop=loop)
         print("Factory created")
         act1 = MockActor("act1")
         act2 = MockActor("act2")

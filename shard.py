@@ -6,7 +6,9 @@ to manage spawning, deletion and distribution of new actors over a cluster.
 The instances of the shard actor also serve as decorators with which we
 register child actor factories and associate them with message templates.
 """
-
+import asyncio
+from random import random, sample
+from math import log
 from secrets import token_urlsafe
 from typing import Callable, Type, Awaitable
 from itertools import groupby, chain
@@ -15,23 +17,34 @@ from message_system_interface import MessageSystemInterface
 from actor import Actor
 
 
-def Shard(actor_base: Type[Actor],
+def shard(actor_base: Type[Actor],
           message_factory: Callable[[], Awaitable[MessageSystemInterface]],
           shard_id: str = None,
           loop = None) -> Actor:
     """
     Takes a concrete actor type and returns an actor
     """
+    info_counter = 0 # Used to provide information to other shards of whether
+                     # they have current or outdated information about some
+                     # particular service.
+    
+    msg_sys = message_factory()
     shard_actor = actor_base(shard_id if shard_id else token_urlsafe(),
-                             message_factory(), loop=loop)
+                             msg_sys, loop=loop)
     
     factories = {}  # This keeps track of all available factory functions
     actors = {}  # This keeps track of all managed actor instances
 
 
-    local_services = {} # This keeps track of all local services
-    remote_services = {} # This keeps track of all remote services
-    remote_shards = [] # A sorted list of shards
+    local_services = {}  # This keeps track of all local services
+    
+    remote_services = {}  # This keeps track of all remote services
+    inactive_remote_services = {}
+    
+    remote_shards = {}
+    inactive_shards = {}  # A set of formerly active shards
+    
+
     
     @shard_actor.daemon("whisperer")
     async def whisperer(whisper_interval=.1):
@@ -46,7 +59,27 @@ def Shard(actor_base: Type[Actor],
         while True:
             await asyncio.sleep(whisper_interval)
             
-        
+            lower = [shard for shard in remote_shards
+                     if shard < shard_actor.name]
+            upper = [shard for shard in remote_shards
+                     if shard > shard_actor.name]
+            
+            
+            recip = chain(sample(lower, k=min(len(lower),
+                                              int(log(len(remote_shards)+1)))),
+                          sample(upper, k=min(len(upper),
+                                              int(log(len(remote_shards)+1)))))
+                       
+            for recipient in recip:
+                await shard_actor.send(recipient, {"action": "receive_info",
+                                                   **encode(shard_actor.name,
+                                                            local_services,
+                                                            remote_services,
+                                                            inactive_remote_services,
+                                                            remote_shards,
+                                                            inactive_shards),
+                                                   "broadcaster": shard_actor.name})
+            
     
     @shard_actor.daemon("broadcaster")
     async def broadcaster():
@@ -56,56 +89,127 @@ def Shard(actor_base: Type[Actor],
         probability which is inversely proportional to the rank the shard has in
         the address space of its neighbors.
         """
+        while True:
+            await asyncio.sleep(1)
+            # use some smart distribution in the future. For now, just use a
+            # uniform distribution
+            
+            if random() < 1/(len(remote_shards)+1):
+                await msg_sys.broadcast({"action": "receive_info",
+                                         **encode(shard_actor.name,
+                                                  local_services,
+                                                  remote_services,
+                                                  inactive_remote_services,
+                                                  remote_shards,
+                                                  inactive_shards),
+                                         "broadcaster": shard_actor.name})
+            else:
+                pass
+        
     
-    service_validator = Schema({"action": Const("register_service"),
-                                "service_name": Regex("^[a-zA-Z0-9_\-]{1,50}$"),
-                                "address": Regex("^[a-zA-Z0-9_\-]{1,50}$")}).is_valid
+
     @shard_actor.action("register_service")
     async def register(message):
         """
         Allows actors to register themselves as providing a service
         """
-        if service_validator(message):
-            if message["service_name"] in local_services:
-                local_services[message["service_name"]].add(message["address"])
-            else:
-                local_services[message["service_name"]] = {message["address"]}
+        if message["service_name"] in local_services:
+            local_services[message["service_name"]].add(message["address"])
+        else:
+            local_services[message["service_name"]] = {message["address"]}
+
+    @shard_actor.action("unregister_service")
+    async def unregister(message):
+        """
+        unregisters a previously registered service
+        """
+        nonlocal local_services
+        nonlocal inactive_remote_services
+        if message["actor"] in local_services:
+            for service in local_services:
+                service -= message["actor"]
+                inactive_remote_services[service].add(message["actor"])
         else:
             pass
     
-    info_receiver_schema = Schema({"action": Const("receive_info"),
-                                   "data": 
-                                       {Regex("^[a-zA-Z_\-]{1,50}$"):
-                                           {Regex("^[a-zA-Z_\-]{1,50}$"):
-                                               lambda x: (isinstance(x, list)
-                                                          and len(x) == 2
-                                                          and isinstance(x[0], str)
-                                                          and len(x[0]) <= 50
-                                                          and isinstance(x[1], bool))
-                                           }
-                                       }
-    }).is_valid
+    @shard_actor.action("request_service")
+    async def request_service(message):
+        """ Requests a service from the service records of the actor """
+        local = list(local_services[message["service"]])
+        remote = list(remote_services[message["service"]])
+        
+        await shard_actor.send(message["sender"], {"action": "service_delivery",
+                                                   "service": message["service"],
+                                                   "local": local,
+                                                   "remote": remote})
+        
     @shard_actor.action("receive_info")
     async def infodump(message):
         """
         Allows the actor to receive updated information from other actors
         
         Expects a dictionary of the form
-        {[name of service]: {address: (version, available)}},
-        letting the receiver know whether the received information is newer
-        (the version number is higher) and if the server has ceased to exist
-        (available is False). The latter is used to distinguish between services
-        unknown to the sender and services the sender knows to have ceased
-        operations.
+        {services: {[service_name}: [addresses]},
+         dead_services: {[service_name]: [addresses]}},
+         shards: {[shard_name]: [address]},
+         dead_shards: {[shard_name]: [address]},
+        }
+        We use this to construct a new set of local data for the service
+        registry. We can use set operations on dictionary keys to combine
+        dictionaries.
         """
         nonlocal remote_services
-        if info_receiver_schema(message):
-            data = message["data"]
-            for service in data:
-                if service in remote_services:
-                    remote_services[service] = merge_info(data[service],
-                                                          remote_services[service])
-                    
+        nonlocal inactive_remote_services
+        nonlocal remote_shards
+        nonlocal inactive_shards
+        
+        #First we collect a setlike collection of all known service categories
+        services = (message["services"].keys() 
+                    | message["dead_services"].keys()
+                    | remote_services.keys()
+                    | inactive_remote_services.keys())
+        
+        tmp_remote = {}
+        tmp_dead = {}
+        
+        # Then we iterate over the known services, constructing sets for active
+        # and inactive providers as we go along.
+        for service in services:
+            remote = ((set(message["services"][service]) 
+                       if service in message["services"] else set()) 
+                      | (remote_services[service]
+                         if service in remote_services else set()))
+            
+            dead = ((set(message["dead_services"][service])
+                     if service in message["services"] else set())
+                    | (inactive_remote_services[service]
+                       if service in inactive_remote_services else set()))
+            
+            remote -= dead | {shard_actor.name}
+            
+            dead -= {shard_actor.name}
+            
+            tmp_remote[service] = remote
+            tmp_dead[service] = dead
+        
+        # Next we update our lists of shards and their service actors
+        shards = message["shards"].keys() | remote_shards.keys()
+        dead_shards = message["dead_shards"].keys() | inactive_shards.keys()
+        
+        shards -= dead_shards
+        
+        shards = {key: merge(message["shards"], remote_shards, key)
+                  for key in shards}
+        
+        dead_shards = {key: merge(message["dead_shards"], inactive_shards, key)
+                       for key in dead_shards}
+        
+        # Next, we update the state variables to reflect our new knowledge
+        
+        remote_services = tmp_remote
+        inactive_remote_services = tmp_dead
+        remote_shards = shards
+        inactive_shards = dead_shards
         
     @shard_actor.action("spawn")
     async def spawn(message):
@@ -118,7 +222,9 @@ def Shard(actor_base: Type[Actor],
 
             name = message["name"] if "name" in message else token_urlsafe(16)
 
-            actor = actor_type(name, message_system=message_factory(), loop=loop)
+            actor = actor_type(name,
+                               message_system=message_factory(),
+                               loop=loop)
             actor_factory(actor, message)
 
             actors[name] = actor
@@ -135,43 +241,47 @@ def Shard(actor_base: Type[Actor],
         return decorator
 
     shard_actor.actor = factory  # Exposes an interface to the programmer
-
+    
+    @shard_actor.on_start
+    async def onstart():
+        await msg_sys.register_shard(shard_actor)
+        
     return shard_actor
 
-def join_dicts(dict1, dict2):
-    """
-    Takes two dicts and returns a full outer join of their items
-    """
-    keys1 = Set(dict1.keys())
-    keys2 = Set(dict2.keys())
-    
-    left = keys1 - keys2
-    right = keys2 - keys1
-    intersection = keys1 & keys2
-    
-    return chain(((key, (dict1[key], None)) for key in left),
-                 ((key, (None, dict2[key])) for key in right),
-                 ((key, (dict1[key], dict2[key])) for key in intersection))
 
+Shard = shard
 
-def merge_info(incoming, present):
-    """ Merges incoming information with the present information """
-    def custom_max(values):
-        """
-        Extracts the most recent information from the output of join_dicts.
-        """
-        (left, right) = values
-        
-        if right is None:
-            return left
-        elif left is None:
-            return right
-        else:
-            return max(values, lambda x: x[0])
-        
-    return {key: custom_max(val) for key, val in join_dicts(incoming, present)}
+def encode(shard,
+           local_services,
+           remote_services,
+           inactive_remote_services,
+           remote_shards,
+           inactive_shards):
+    """ Simply prerpares a dictionary for transmission """
+    services = (local_services.keys()
+                | remote_services.keys() 
+                | inactive_remote_services.keys())
     
-def encode_info(local_info, remote_info):
-    """ Encodes a shard's information in a format suitable for transmission """
+    new_remote_serv = {key: list(merge(local_services, remote_services, key))
+                       for key in services}
     
+    local_shard = list(set(remote_shards[shard]
+                           if shard in remote_shards
+                           else [])
+                       | set(sum(local_shards.values(), [])))
+    # Since the shard does not keep track of inactive local service actors,
+    
+    return {"services": new_remote_serv,
+            "dead_services": {key: list(val) for key, val
+                              in inactive_remote_services.items()},
+            "shards": {**remote_shards, shard: local_shard},
+            "dead_shards": {inactive_shards},
+            }
+             
+def merge(dict1, dict2, key):
+    """ Merges the contents from dict1 and dict2 as sets at the key key """
+    A = set(dict1[key]) if key in dict1 else set()
+    B = set(dict2[key]) if key in dict2 else set()
+    return A | B
+
     

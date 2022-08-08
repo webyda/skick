@@ -16,7 +16,7 @@ class SimpleMessage(MessageSystemInterface):
     """
     def __init__(self, name, queues: dict) -> None:
         self.queues = queues
-
+        self.shard = None
     async def mailman(self, actor):
         """
         For this type of queue, mailman simply attaches the queue to the
@@ -32,6 +32,18 @@ class SimpleMessage(MessageSystemInterface):
             await self.queues[address].put(message)
         else:
             pass
+        
+    async def register_shard(self, address):
+        """ Registers the shard """
+        self.shard = address
+    
+    async def broadcast(self, message: dict) -> None:
+        """ Sends a message to the shard """
+        if self.shard:
+            await self.send(self.shard, message)
+        else:
+            pass
+        
 
 
 class SimpleFactory(MessageSystemFactory):

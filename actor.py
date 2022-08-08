@@ -32,7 +32,8 @@ class Actor:
         self.loop = loop or asyncio.get_event_loop()
         self._actions = {}
         self._daemons = {}
-
+        self._on_start = None
+        
         self._daemon_taks = {}
         self._message_task = None
         self._mailman_cleanup = None
@@ -73,6 +74,15 @@ class Actor:
             self._daemons[name] = func
             return func
         return decorator
+    
+    def on_start(self, func):
+        """
+        Registers a method which will be run asynchronously when the actor is
+        started.
+        """
+        
+        self._on_start = func
+        return func
     
     async def replace(self,
                       factory: Callable[["Actor", dict], Awaitable[None]],
@@ -119,6 +129,9 @@ class Actor:
                               for key, item in self._daemons.items()}
 
         self._message_task = self.loop.create_task(self._process_messages())
+        
+        if self._on_start:
+            await self._on_start()
 
     async def stop(self) -> None:
         """ Kills the actor and cleans up """

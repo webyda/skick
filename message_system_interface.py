@@ -25,6 +25,16 @@ class MessageSystemInterface(ABC):
         address specified.
         """
 
+    @abstractmethod
+    async def register_shard(self, address):
+        """
+        This method registers the current shard with the messaging system
+        so that it can receive broadcasts meant for all shards.
+        """
+        
+    @abstractmethod
+    async def broadcast(self, message: dict) -> None:
+        """ This method broadcasts a message to all shards """
 
 class MessageSystemFactory(ABC):
     """
@@ -35,7 +45,7 @@ class MessageSystemFactory(ABC):
     boilerplate code for setting up individual actors' messaging systems.
     """
     @abstractmethod
-    def __init__(self, config: Any) -> None:
+    def __init__(self, config: Any, loop=None) -> None:
         """ We require an __init__ method with a specific interface """
 
     @abstractmethod
