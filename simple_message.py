@@ -5,6 +5,7 @@ one.
 """
 
 from typing import Any
+from json import loads, dumps
 
 from message_system_interface import MessageSystemInterface, MessageSystemFactory
 
@@ -26,10 +27,23 @@ class SimpleMessage(MessageSystemInterface):
 
     async def send(self, address: str, message: dict) -> None:
         """
-        Simply selects the queue from the dictionary and appends the message
+        Simply selects the queue from the dictionary and appends the message.
+        We convert the message to json and then back again, because if we don't
+        we may experience bugs where the programmer relied on the message being
+        serialized and deserialized. A concrete example from testing is this:
+        an actor contains a list of strings. The actor sends the list to its
+        subscribers. The subscribers then append items to their local version
+        of the list after the actor sends updates. In this case, unless we
+        perform a deep copy, SimpleMessage will send a *reference* to the
+        original list, and the same item will appear many times because
+        the updates are appended once per subscriber. This will not happen
+        in messaging systems that transmit JSON to a server. In order to
+        replicate the exact behavior of such servers, we perform the same
+        serialization-deserialization procedure.
         """
+        
         if address in self.queues:
-            await self.queues[address].put(message)
+            await self.queues[address].put(loads(dumps(message)))
         else:
             pass
         

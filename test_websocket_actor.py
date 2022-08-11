@@ -112,7 +112,7 @@ def test_websocket_actor():
                           ])
 
         msg = SimpleFactory({})
-        wserver = WebsocketActor(srv, msg.create)
+        wserver = WebsocketActor(srv, msg.create, loop = loop)
 
         async def queue_sniper():
             nonlocal msg
@@ -137,9 +137,8 @@ def test_websocket_actor():
 
             @inst.socket("get_name", {})
             async def get_name(message):
-                print(f"Socket named {name} received message {message}, sending message {{'action': 'name', 'name': name}}")
-                await inst.send(inst.associate,
-                                {"action": "socksend", "name": name})
+                print(f"Socket named {name} received message {message}, sending message {{'name': name}}")
+                await inst.socksend({"name": name})
 
         await wserver.run()
 
@@ -152,8 +151,8 @@ def test_websocket_actor():
                 await asyncio.sleep(.1)
                 tries += 1
 
-        assert json.dumps({'action': 'socksend', 'name': 'adrian'}) in srv.logs[0]
-        assert json.dumps({'action': 'socksend', 'name': 'brian'}) in srv.logs[1]
+        assert json.dumps({'name': 'adrian'}) in srv.logs[0]
+        assert json.dumps({'name': 'brian'}) in srv.logs[1]
 
         qsnip.cancel()
         await wserver.stop()
@@ -189,7 +188,7 @@ def test_replacement():
             @inst.socket("get_name", {})
             async def get_name(message):
                 print("Getting name")
-                await inst.send(inst.associate, {"action": "socksend", "name": name})
+                await inst.socksend({"name": name})
 
         @wserver.session("anon")
         def anon(inst, messsage):
@@ -201,7 +200,7 @@ def test_replacement():
             async def set_name(message):
                 nonlocal name
                 name = message["name"]
-                await inst.replace(named, {"name": name})
+                await inst.replace("named", {"name": name})
 
         await wserver.run()
 
@@ -213,7 +212,7 @@ def test_replacement():
                 tries += 1
 
         print(srv.logs)
-        assert json.dumps({'action': 'socksend', 'name': 'adrian'}) in srv.logs[0]
+        assert json.dumps({'name': 'adrian'}) in srv.logs[0]
         assert len(get_referrers(obj)) == 1
 
         srv.close()

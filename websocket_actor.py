@@ -54,6 +54,32 @@ class FrontActor(Actor):
         await super().replace(factory, message)
         self._default_actions()  # Re-add default actions
 
+    def on_start(self, func):
+        """
+        We wish to ignore on_start and on_stop reserving them for the back
+        actor.
+        """
+        return func
+
+    def on_stop(self, func):
+        """
+        We wish to ignore on_start and on_stop reserving them for the back
+        actor.
+        """
+        return func
+
+    def front_on_start(self, func):
+        """
+        Allow the receptionist to be assigned startup actions.
+        """
+        return super().on_start(func)
+
+    def front_on_stop(self, func):
+        """
+        Allows the receptionist to be assigned stop actions.
+        """
+        return super().on_stop(func)
+
     def action(self, name):
         """
         We do not wish to register actions by default in front actors.
@@ -72,13 +98,13 @@ class FrontActor(Actor):
         def decorator(func):
             return func
         return decorator
-    
+
     def front_daemon(self, name):
         """
         Allows running a daemon specifically on the front actor.
         """
         return super().daemon(name)
-     
+
     def front_action(self, name):
         """
         In some cases, we may be interested in specifically assigning an action
@@ -98,7 +124,7 @@ class FrontActor(Actor):
     async def socksend(self, message):
         """ Sends a message over the websocket if there is one. """
         if self._websocket:
-            await self._websocket.send(dumps(message))
+            await self._websocket.send(dumps(message["message"]))
 
     async def socklistener(self):
         """ Listens to the websocket """
@@ -106,7 +132,7 @@ class FrontActor(Actor):
             try:
                 message = loads(message)
             except JSONDecodeError:
-                await self.socksend({"action": "error"})
+                await self.socksend({"message": {"action": "error"}})
                 continue
 
             if "action" in message:
@@ -116,11 +142,11 @@ class FrontActor(Actor):
                     if valid:
                         await self.send(self.associate, message)
                     else:
-                        await self.socksend({"action": "error", "type": "not schema compliant"})
+                        await self.socksend({"message": {"action": "error", "type": "not schema compliant"}})
                 else:
-                    await self.socksend({"action": "error", "type": f"No schema present for action '{action}'"})
+                    await self.socksend({"message": {"action": "error", "type": f"No schema present for action '{action}'"}})
             else:
-                await self.socksend({"action": "error", "type": "No action specified"})
+                await self.socksend({"message": {"action": "error", "type": "No action specified"}})
 
     async def run(self):
         await super().run()
@@ -151,6 +177,10 @@ class BackActor(Actor):
         """
         return self.action(name)
 
+    async def socksend(self, message):
+        """ Sends a message to the websocket via the front actor """
+        await self.send(self.associate, {"action": "socksend", "message": message})
+        
     async def replace(self, factory, message):
         """
         The replacement method needs to be adapted to websocket syzygies.
@@ -158,11 +188,11 @@ class BackActor(Actor):
         its behavior first, and then requests the receptionist actor to change
         its schema specifications.
         """
-        await super().replace(factory, message)
+        await super().replace(self._replacement_factories[factory], message)
 
         await self.send(self.associate,
                         {"action": "replace_from_message",
-                         "factory": self._replacement_factories[factory],
+                         "factory": factory,
                          "message": message})
 
     def front_action(self, name):
@@ -172,12 +202,24 @@ class BackActor(Actor):
         def decorator(func):
             return func
         return decorator
-    
+
     def front_daemon(self, name):
         """ Ignores daemons specifically meant to run on the front actor """
         def decorator(func):
             return func
         return decorator
+
+    def front_on_start(self, func):
+        """
+        Ignore start actions meant for the receptionist actor
+        """
+        return func
+
+    def front_on_stop(self, func):
+        """
+        Ignore stop actions meant for the receptionist actor
+        """
+        return func
 
 
 def WebsocketActor(socket_interface: WebsocketServerInterface,
@@ -257,7 +299,7 @@ def WebsocketActor(socket_interface: WebsocketServerInterface,
                                       loop=loop)
 
             receptionist._replacement_factories = subsession_types
-            session_actor._replacement_factories = reverse_subsessions
+            session_actor._replacement_factories = subsession_types
 
             receptionist._websocket = socket
 

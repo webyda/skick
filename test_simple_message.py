@@ -42,20 +42,20 @@ def test_simplemessage():
 
         assert "1" in mf.queues
 
-        await ms.send("1", {"message"})
+        await ms.send("1", {"message": "msg"})
         await asyncio.sleep(.1)
         print(actor.log)
-        assert actor.log[0] == {"message"}
+        assert actor.log[0] == {"message": "msg"}
 
         await ms2.mailman(actor2)
 
-        await ms.send("2", {"message2"})
-        await ms2.send("1", {"message3"})
+        await ms.send("2", {"message2": "msg"})
+        await ms2.send("1", {"message3": "msg"})
         await asyncio.sleep(.1)
         print(actor.log)
         print(actor2.log)
-        assert actor.log[1] == {"message3"}
-        assert actor2.log[0] == {"message2"}
+        assert actor.log[1] == {"message3": "msg"}
+        assert actor2.log[0] == {"message2": "msg"}
 
         ac_task.cancel()
         ac_task2.cancel()

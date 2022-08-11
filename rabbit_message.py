@@ -29,7 +29,7 @@ class RabbitFactory(MessageSystemFactory):
         connection = await aio_pika.connect_robust(config, loop=self.loop)
         channel = await connection.channel()
         exchange = await channel.declare_exchange("ActorExchange", "direct")
-        broadcast = await cannel.declare_exchange("BroadcastExchange", "fanout")
+        broadcast = await channel.declare_exchange("BroadcastExchange", "fanout")
         
         self.future.set_result((connection, channel, exchange, broadcast))
         

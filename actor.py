@@ -33,8 +33,9 @@ class Actor:
         self._actions = {}
         self._daemons = {}
         self._on_start = None
+        self._on_stop = None
         
-        self._daemon_taks = {}
+        self._daemon_tasks = {}
         self._message_task = None
         self._mailman_cleanup = None
         self._message_system = message_system
@@ -84,6 +85,14 @@ class Actor:
         self._on_start = func
         return func
     
+    def on_stop(self, func):
+        """
+        Registers a method which will be run asynchronously when the actor
+        is stopped
+        """
+        self._on_stop = func
+        return func
+        
     async def replace(self,
                       factory: Callable[["Actor", dict], Awaitable[None]],
                       message: dict) -> None:
@@ -98,8 +107,15 @@ class Actor:
             task.cancel()    
         self._daemons.clear()
         self._daemon_tasks.clear()
-        
+        if self._on_stop:
+            await self._on_stop()
         factory(self, message)
+        if self._on_start:
+            await self._on_start()
+        for name, func in self._daemons.items():
+            self._daemon_tasks[name] = self.loop.create_task(func())
+
+
 
     async def mailman(self) -> None:
         """
@@ -125,14 +141,18 @@ class Actor:
         """
 
         await self.mailman()
-        self._daemon_tasks = {key: self.loop.create_task(item())
-                              for key, item in self._daemons.items()}
-
-        self._message_task = self.loop.create_task(self._process_messages())
         
         if self._on_start:
             await self._on_start()
-
+            
+        self._daemon_tasks = {key: self.loop.create_task(item())
+                              for key, item in self._daemons.items()}
+        for task in self._daemon_tasks.values():
+            task.add_done_callback(self._error_callback)
+            
+        self._message_task = self.loop.create_task(self._process_messages())
+        self._message_task.add_done_callback(self._error_callback)
+        
     async def stop(self) -> None:
         """ Kills the actor and cleans up """
         if self._message_task:
@@ -141,5 +161,18 @@ class Actor:
         for task in self._daemon_tasks.values():
             task.cancel()
 
+        if self._on_stop:
+            await self._on_stop()
+            
         if self._mailman_cleanup:
             await self._mailman_cleanup()
+            
+    def _error_callback(self,task):
+        if not task.cancelled():
+            if exception := task.exception():
+                print(exception)
+                raise exception
+            else:
+                pass
+        else:
+            pass
