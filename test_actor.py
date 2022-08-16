@@ -6,8 +6,9 @@ import asyncio
 from gc import get_referrers
 import pytest
 from actor import Actor
-
-
+from shard import Shard
+from simple_message import SimpleFactory
+from conversation import Call, Respond
 class MockMSI:
     """ A mock Message System """
     def __init__(self, logger, messages):
@@ -122,3 +123,92 @@ def test_replacement():
         assert log[1][1]["inst.type"] == "second"
 
     loop.run_until_complete(test())
+
+
+
+def test_conversation():
+    """
+    This is a test which is designed to test the conversation functionality
+    of actors. It simply attempts to see if the handsake, reply and close
+    mechanics work vaguely as expected. Due to the nature of the mechanism
+    being tested, it is not realistic to make a proper unit test. Instead, we
+    will have to perform something closer to an integration test.
+    """
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loga = []
+    logb = []
+    msg = SimpleFactory({})
+    shard = Shard(Actor, msg.create, shard_id = "shard", loop = loop)
+    
+    @shard.actor("A")
+    def A(inst, message):
+        """ An actor that can converse with other versions of itself """
+        print("A Instantiated")
+        async def on_close():
+            print("A closing")
+            loga.append("CLOSED")
+            
+        @inst.conversation("call_other")
+        async def call(message):
+            print("A initiating conversation")
+            resp = yield Call("B",
+                       {"action": "receive_call",
+                        "message": "Hello, I am A"},
+                       on_close=on_close)
+            print(f"A received reply {resp}")
+            loga.append(resp)
+            if resp == "Hello, I am B":
+                resp = yield "Hi B, nice to meet you"
+            else:
+                resp = yield "I only talk to B. Goodbye"
+            
+            loga.append(resp)
+            
+    
+    @shard.actor("B")
+    def B(inst, message):
+        print("B initiated")
+        async def on_close():
+            logb.append("CLOSED")
+        
+        @inst.conversation("receive_call")
+        async def pick_up(message):
+            """
+            This indicates to B that A is initiating a conversation.
+            In such cases B expects A to make the first move.
+            """
+            print(f"B responding to conversation beginning with {message}")
+            yield Respond(message, on_close=on_close)
+            print("B getting ready to respond")
+            logb.append(message)
+            
+            resp = yield "Hello, I am B"
+            print("Got here")
+            logb.append(resp)
+    
+    async def test():
+        await shard.run()
+        await shard.send("shard",{"action": "spawn", "type": "A", "name": "A"})
+        await shard.send("shard",{"action": "spawn", "type": "B", "name": "B"})
+        
+        await asyncio.sleep(.1)
+        
+        await shard.send("A", {"action": "call_other"})
+        
+        await asyncio.sleep(.1)
+    
+    loop.run_until_complete(test())
+    
+    print(loga)
+    assert loga == ["Hello, I am B", "CLOSED"]
+    print(logb)
+    assert logb[0]["action"] == "receive_call"
+    assert logb[0]["message"] == "Hello, I am A"
+    assert logb[1:] == ["Hi B, nice to meet you", "CLOSED"]
+    
+        
+        
+        
+        
