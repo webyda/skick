@@ -110,7 +110,7 @@ class RabbitMessage(MessageSystemInterface):
         """
         await self.future
         await self.broadcast_ex.declare()
-        await self.queue.bind(self.broadcast_ex, self.address)
+        await self.queue.bind(self.broadcast_ex, address)
     
     async def broadcast(self, message):
         """
@@ -119,4 +119,4 @@ class RabbitMessage(MessageSystemInterface):
         await self.future
         msg = json.dumps(message).encode()
         msg_object = aio_pika.Message(body=msg)
-        await self.broadcast_ex.publish(msg_object)
+        await self.broadcast_ex.publish(msg_object, routing_key = "")

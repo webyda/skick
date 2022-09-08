@@ -11,8 +11,8 @@ from secrets import token_hex
 
 class Conversation():
     """
-    A class for managing conversations so as to not pollute the actor class
-    it contains a generator, some helper methods and mechanisms for managing
+    A class for managing conversations so as to not pollute the actor class.
+    It contains a generator, some helper methods and mechanisms for managing,
     closing and opening conversations in an appropriate and clean way.
     """
     def __init__(self, partner: str, cid: str=None, on_close = None):
@@ -40,6 +40,10 @@ class Conversation():
         
         1. It can return a nonempty dict, in which case the dict is a reply
            to the partner.
+        2. It can return a non-dict, True value, in which case the handling is
+           deferred to the actor for further consideration. This is to allow
+           an escape hatch from the conventional conversation system for things
+           like websocket client queries mid-conversation.
         2. It can return a dict with an end_conversation action, in which case
            it has decided to terminate the conversation amicably.
         3. It may have raised a StopAsyncIteration exception, in which case
@@ -50,14 +54,16 @@ class Conversation():
         """
         if self.generator:
             try:
-                print("Processing message:", message)
                 reply = await self.generator.asend(message["message"])
                 if reply:
-                    print(reply)
-                    return (self.partner, {"action": "receive_reply",
-                                           "cid": self.cid,
-                                           "message": reply,
-                                           "sender": self.name})
+                    if isinstance(reply, dict):
+                        return (self.partner, {"action": "receive_reply",
+                                               "cid": self.cid,
+                                               "message": reply,
+                                               "sender": self.name})
+                    else:
+                        reply.cid = self.cid # we need to inject a reference to the actual conversation
+                        return reply
                 else:
                     return (self.partner, {"action": "end_conversation",
                                            "cid": self.cid})
@@ -75,7 +81,6 @@ class Conversation():
         cleanup operations inside of the conversation and actor closures
         respectively.
         """
-        print(f"Closing conversation {self.cid} from {self.name}")
         if self.on_close:
             await self.on_close()
         else:

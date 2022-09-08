@@ -2,10 +2,23 @@
 Contains a base Actor class, being the fundamental object of actor models.
 """
 import asyncio
-from typing import Callable, Awaitable
+import traceback
+from typing import Callable, Awaitable, Any
+from inspect import isasyncgenfunction
+
+from schema import Schema
 
 from message_system_interface import MessageSystemInterface
 
+def schemator(schema, func):
+    sch = Schema(schema)
+    async def ret(message):
+        if sch.is_valid(message):
+            await func(message)
+        else:
+            pass
+    return ret
+    
 
 class Actor:
     """
@@ -45,6 +58,13 @@ class Actor:
         
         self._conversations = {} # A list of active "conversations"
 
+        self._main_sentinel = None # The sentinel for the main task
+        self._monitors = set() # A set of monitors for this actor
+    
+    def _default_actions(self):
+        """ Adds default actions """
+        self.action("monitor")(self._monitor)
+        
     async def _process_reply(self, message: dict) -> None:
         """
         This method interfaces with the conversation object. It ensures that
@@ -56,13 +76,16 @@ class Actor:
         elif message["action"] == "receive_reply":
             conversation = self._conversations[message["cid"]]
             reply = await conversation(message)
-            if reply:
-                (destination, reply) = reply
-                await self.send(destination, reply)
-                if reply["action"] == "end_conversation":
-                    await self._end_conversation(reply)
-            else:
-                pass
+            await self._reply_parser(reply)
+            
+    async def _reply_parser(self, reply):
+        if reply:
+            (destination, reply) = reply
+            await self.send(destination, reply)
+            if reply["action"] == "end_conversation":
+                await self._end_conversation(reply)
+        else:
+            pass
                 
     async def _start_conversation(self, generator):
         """
@@ -116,10 +139,12 @@ class Actor:
         2. It is a reply in an active conversation, in which case the handling
            is deferred to the _process_reply method.
         3. The action returned something True, in which case it is a
-           generator, and we need to handle it as a convesation start. 
+           generator, and we need to handle it as a conversation start. 
         """
         while True:
             message = await self.queue.get()
+            if message["action"] == "done":
+                break
             if message["action"] in self._actions:
                 await self._actions[message["action"]](message)
 
@@ -134,26 +159,55 @@ class Actor:
             else:
                 pass
 
-    def action(self, name: str) -> (
+    def action(self, name: str, schema: Any = None) -> (
         Callable[
             [
                 Callable[[dict], Awaitable[None]],
             ],
             Callable[[dict], Awaitable[None]]
             ]):
-        """ Adds a regular action to the actor. """
+        """
+        Automatically detects whether func is an async function, in which case
+        the method is a regular action, or whether it is an asynchronous
+        generator, in which case we are dealing with a conversation type action
+        """
         def decorator(func):
-            self._actions[name] = func
+            if schema:
+                if isasyncgenfunction(func):
+                    self._conversation_prototypes[name] = schemator(schema, func)
+                else:
+                    self._actions[name] = schemator(schema, func)
+            else:
+                if isasyncgenfunction(func):
+                    self._conversation_prototypes[name] = func
+                else:
+                    self._actions[name] = func
             return func
         return decorator
 
+    async def converse(self, partner, message, prototype):
+        """
+        Manually starts a conversation with a partner without necessarily
+        having a prototype, allowing "anonymous" conversations. As well as
+        spawning a conversation even if the action was originally a primitive
+        action.
+        """
+        if prototype in self._conversation_prototypes:
+            generator = self._conversation_prototypes[prototype](message)
+            await self._start_conversation(generator)
+        else:
+            generator = prototype(message)
+            await self._start_conversation(generator)
+
     def conversation(self, name):
-        """ Adds a generator to the appropriate dictionary """
+        """ 
+        Explicitly adds a generator to the appropriate conversation dictionary
+        """
         def decorator(gen):
             self._conversation_prototypes[name] = gen
             return gen
         return decorator
-    
+
     def daemon(self, name):
         """
         Registers a daemon that will be launched as a task when the actor
@@ -181,7 +235,31 @@ class Actor:
         """
         self._on_stop = func
         return func
-        
+
+    async def spawn(self,
+                    factory: str,
+                    message: dict,
+                    same_shard: bool=True, # Ignored for now
+                    name: str=None,
+                    add_monitor: bool = True):
+
+        """
+        This method spawns an actor using the given factory,
+        sending the prescribed message to it.
+        """
+        args = {}
+        if name:
+            args["name"] = name
+        if add_monitor:
+            args["add_monitor"] = self.name
+
+        if self._shard:
+            await self.send(self._shard, {"action": "spawn",
+                                     "type": factory,
+                                     "message": message,
+                                     **args
+                                     })
+
     async def replace(self,
                       factory: Callable[["Actor", dict], Awaitable[None]],
                       message: dict) -> None:
@@ -191,20 +269,27 @@ class Actor:
         function of the new actor after having cleared the _actions dict.
         """
         self._actions.clear()
-        
+        self._default_actions()
         for task in self._daemon_tasks.values():
             task.cancel()    
         self._daemons.clear()
         self._daemon_tasks.clear()
         if self._on_stop:
             await self._on_stop()
+        self._on_stop = None
+        self._on_start = None
+
+        for conversation in self._conversations:
+            await self.send(conversation.partner, {"action": "end_conversation",
+                                                   "cid": conversation.cid})
+            await conversation.close()
+        self._conversations.clear()
+
         factory(self, message)
         if self._on_start:
             await self._on_start()
         for name, func in self._daemons.items():
             self._daemon_tasks[name] = self.loop.create_task(func())
-
-
 
     async def mailman(self) -> None:
         """
@@ -238,9 +323,15 @@ class Actor:
                               for key, item in self._daemons.items()}
         for task in self._daemon_tasks.values():
             task.add_done_callback(self._error_callback)
-
+        self._default_actions()
         self._message_task = self.loop.create_task(self._process_messages())
-        self._message_task.add_done_callback(self._error_callback)
+        self._main_sentinel = await self._sentinel(self._message_task,
+                                                   self._monitors,
+                                                   "main_task",
+                                                   exceptions=True,
+                                                   cancellations=True,
+                                                   done=True)
+        #self._message_task.add_done_callback(self._error_callback)
 
     async def stop(self) -> None:
         """ Kills the actor and cleans up """
@@ -259,9 +350,65 @@ class Actor:
     def _error_callback(self, task):
         if not task.cancelled():
             if exception := task.exception():
-                print(exception)
+                print(traceback.print_exc())#exception)
                 raise exception
             else:
                 pass
+        else:
+            pass
+
+    async def _sentinel(self,
+                        task,
+                        monitors,
+                        task_tag,
+                        exceptions = True,
+                        cancellations=False,
+                        done = False):
+        """
+        Spawns a task to watch over task and report to its monitors when the
+        task is finished for one reason or another (typically exceptions)
+        """
+        async def reporter():
+            try:
+                await task
+            except BaseException as e:
+                print(traceback.format_exc())
+                #print(f"Exception: {e}")
+            if task.cancelled():
+                print("Cancelled")
+                if cancellations:
+                    for monitor in monitors:
+                        await self.send(monitor, {"action": "sentinel",
+                                                  "type": "cancellation",
+                                                  "address": self.name,
+                                                  "tag": task_tag})
+                else:
+                    pass
+            elif task.exception():
+                print("Excepted")
+                if exceptions:
+                    for monitor in monitors:
+                        await self.send(monitor, {"action": "sentinel",
+                                                  "type": "exception",
+                                                  "address": self.name,
+                                                  "exception": str(task.exception()),
+                                                  "tag": task_tag})
+            else:
+                print("Done")
+                if done:
+                    for monitor in monitors:
+                        await self.send(monitor, {"action": "sentinel",
+                                                  "type": "done",
+                                                  "address": self.name,
+                                                  "tag": task_tag})
+
+        return self.loop.create_task(reporter())
+
+    async def _monitor(self, message):
+        """
+        An action for adding a monitor to the actor
+        """
+        if "address" in message:
+            self._monitors.add(message["address"])
         else:
             pass
