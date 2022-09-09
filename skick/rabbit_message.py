@@ -6,7 +6,7 @@ import json
 
 import aio_pika
 
-from message_system_interface import MessageSystemInterface, MessageSystemFactory
+from .message_system_interface import MessageSystemInterface, MessageSystemFactory
 
 
 class RabbitFactory(MessageSystemFactory):

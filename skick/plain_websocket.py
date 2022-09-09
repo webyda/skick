@@ -5,7 +5,7 @@ around which it was designed, Websockets being the most commonly used websocket
 library for Python. In this sense it is a "plain vanilla" implementation.
 """
 from websockets import server
-from websocket_interface import WebsocketConnectionObject, WebsocketServerInterface
+from .websocket_interface import WebsocketConnectionObject, WebsocketServerInterface
 
 
 # We mock a connection object class to provide the downstream programmer with

@@ -18,8 +18,8 @@ from functools import reduce
 
 from schema import Const, Optional
 
-from message_system_interface import MessageSystemInterface
-from actor import Actor
+from .message_system_interface import MessageSystemInterface
+from .actor import Actor
 
 def encode(shard,
            local_services,

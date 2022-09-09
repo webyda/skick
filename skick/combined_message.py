@@ -7,11 +7,11 @@ If the message is to be sent between servers Rabbit will be used.
 from typing import Any
 import asyncio
 
-from message_system_interface import MessageSystemInterface, MessageSystemFactory
+from .message_system_interface import MessageSystemInterface, MessageSystemFactory
 
-from simple_message import SimpleFactory
+from .simple_message import SimpleFactory
 
-from rabbit_message import RabbitFactory
+from .rabbit_message import RabbitFactory
 
 class CombinedMessage(MessageSystemInterface):
     """

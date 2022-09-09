@@ -4,7 +4,7 @@ for single core systems. It relies directly on python dictionaries and
 functions without the need for external servers and libraries.
 """
 
-from abstract_hash import AbstractHash
+from .abstract_hash import AbstractHash
 
 class SimpleHash(AbstractHash):
     dictionaries = {}

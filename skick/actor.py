@@ -8,7 +8,7 @@ from inspect import isasyncgenfunction
 
 from schema import Schema
 
-from message_system_interface import MessageSystemInterface
+from .message_system_interface import MessageSystemInterface
 
 def schemator(schema, func):
     sch = Schema(schema)

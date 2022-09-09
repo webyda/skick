@@ -5,7 +5,7 @@ This file provides a simple interface to Redis.
 import asyncio
 import redis.asyncio as redis
 
-from abstract_hash import AbstractHash
+from .abstract_hash import AbstractHash
 
 
 def prohibit_keys(func):

@@ -7,7 +7,7 @@ one.
 from typing import Any
 from json import loads, dumps
 
-from message_system_interface import MessageSystemInterface, MessageSystemFactory
+from .message_system_interface import MessageSystemInterface, MessageSystemFactory
 
 
 class SimpleMessage(MessageSystemInterface):

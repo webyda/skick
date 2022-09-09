@@ -15,9 +15,9 @@ from json import JSONDecodeError, dumps, loads
 
 from schema import Schema, Const, And, Or
 
-from actor import Actor
-from websocket_interface import WebsocketConnectionObject, WebsocketServerInterface
-from message_system_interface import MessageSystemInterface
+from .actor import Actor
+from .websocket_interface import WebsocketConnectionObject, WebsocketServerInterface
+from .message_system_interface import MessageSystemInterface
 
 
 class SocketQuery():

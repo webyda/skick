@@ -12,22 +12,22 @@ import asyncio
 from secrets import token_hex
 
 # Import the messaging system interfaces
-from simple_message import SimpleFactory
-from rabbit_message import RabbitFactory
-from combined_message import CombinedFactory
+from .simple_message import SimpleFactory
+from .rabbit_message import RabbitFactory
+from .combined_message import CombinedFactory
 
 
 # Import all distributed dictionaries
-from simple_hash import SimpleHash
-from redis_hash import RedisHash
+from .simple_hash import SimpleHash
+from .redis_hash import RedisHash
 
 # Import all websocket implementations
-from plain_websocket import PlainWebsocket
+from .plain_websocket import PlainWebsocket
 
 # Import our various actors 
-from actor import Actor
-from websocket_actor import WebsocketActor
-from shard import Shard
+from .actor import Actor
+from .websocket_actor import WebsocketActor
+from .shard import Shard
 
 
 class Skick:
