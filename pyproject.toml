@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "skick"
+description = 'Skick is a library for building actor based web application backends that communicate with javascript clients over websockets. It is in a very early state of development.'
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+keywords = ["actor", "actor model", "websockets", "rabbitmq", "asyncio"]
+authors = [
+  { name = "Wennströms byrå för datateknik AB", email = "adrian@webyda.se" },
+]
+maintainers = [
+  { name = "Adrian Wennström", email = "adrian@webyda.se" }
+]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Information Technology",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Internet",
+  "Topic :: Internet :: WWW/HTTP :: Dynamic Content",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+dependencies = [
+  "aio-pika>=8",
+  "schema",
+  "websockets",
+  "redis",
+  ]
+version = "0.0.1a0.dev0"
+[project.urls]
+Documentation = "https://github.com/webyda/skick#readme"
+Issues = "https://github.com/webyda/skick/issues"
+Source = "https://github.com/webyda/skick"
+
+[tool.hatch.build]
+include = [
+  "skick",
+  "README.md",
+  "LICENSE",
+  "Contributors",
+  ]
+exclude = [
+  "tests",
+  "examples",
+  "*toml",
+  "dist",
+  ]
