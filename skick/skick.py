@@ -35,7 +35,7 @@ class Skick:
     A class which acts as an Adapter, presenting a simple, convenient interface
     to the underlying reified closures, objects, etc. 
     """
-    def __init__(self, on_start, *args, **kwargs):
+    def __init__(self, on_start=None, *args, **kwargs):
         self.on_start = on_start
         
         if args:
@@ -137,8 +137,9 @@ class Skick:
             self.tasks["websocket"] = await self.ws_actor.run()
         else:
             self.tasks["websocket"] = None
-            
-        await self.on_start(self.shard)
+        
+        if self.on_start:
+            await self.on_start(self.shard)
     
     def start(self):
         self.loop.create_task(self._run())

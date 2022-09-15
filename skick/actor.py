@@ -185,7 +185,7 @@ class Actor:
             return func
         return decorator
 
-    async def converse(self, partner, message, prototype):
+    async def converse(self, message, prototype):
         """
         Manually starts a conversation with a partner without necessarily
         having a prototype, allowing "anonymous" conversations. As well as
