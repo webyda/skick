@@ -55,7 +55,7 @@ class Actor:
         self._mailman_cleanup = None
         self._message_system = message_system
         self._shard = shard  # lets us record the name of the shard
-        
+        self._factories = None #  this may be injected by a shard
         self._conversations = {} # A list of active "conversations"
 
         self._main_sentinel = None # The sentinel for the main task
@@ -268,6 +268,12 @@ class Actor:
         the state encapsulating closure. It does this by running the factory
         function of the new actor after having cleared the _actions dict.
         """
+        if isinstance(factory, str):
+            # If the actor was spawned by a shard, it will inject a dictionary
+            # of available factories. This allows us to replace actors using
+            # actor type names. If not, the actor will halt and catch fire.
+            factory = self._factories[factory][1]
+            
         self._actions.clear()
         self._default_actions()
         for task in self._daemon_tasks.values():

@@ -310,6 +310,8 @@ def shard(actor_base: Type[Actor],
                                message_system=message_factory(),
                                loop=loop,
                                shard=shard_actor.name)
+            actor._factories = factories
+            
             actor_factory(actor, message)
 
             actors[name] = actor
