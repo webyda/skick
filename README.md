@@ -718,7 +718,7 @@ use the Directory class to transfer it to the main.py file.
 #a.py
 from skick import Directory
 
-Directory A()
+A = Directory()
 
 @A.actor("a_actor")
 def a_actor(inst, messages):
