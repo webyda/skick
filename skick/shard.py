@@ -16,10 +16,11 @@ from typing import Callable, Type, Awaitable
 from itertools import groupby, chain
 from functools import reduce
 
-from schema import Const, Optional
+from schema import Schema, Const, Optional
 
 from .message_system_interface import MessageSystemInterface
 from .actor import Actor
+from .conversation import Respond
 
 def encode(shard,
            local_services,
@@ -194,6 +195,23 @@ def shard(actor_base: Type[Actor],
                                                    "local": local,
                                                    "remote": remote})
         
+    query_schema = Schema({"action": Const("query_service"),
+                           "message": str,
+                           "sender": str,
+                           "cid": str}).is_valid
+    @shard_actor.action("query_service")
+    async def query_service(msg):
+        print(msg)
+        yield Respond(msg)
+        if query_schema(msg):
+            serv = msg["message"]
+            local = list(local_services[serv]) if serv in local_services else []
+            remote = list(remote_services[serv]) if serv in remote_services else []
+            yield {"local": local, "remote": remote}
+        
+        else:
+            yield {"error": "invalid query"}
+
     @shard_actor.action("receive_info", schema={"action": Const("receive_info"),
                                                 "services": dict,
                                                 "dead_services": dict,

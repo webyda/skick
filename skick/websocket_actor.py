@@ -122,12 +122,12 @@ class FrontActor(Actor):
         factory = self._replacement_factories[message["factory"]]
         await self.replace(factory, message["message"])
 
-    async def replace(self, factory, message):
+    async def _replace_cleanse(self):
         self._socket_schemas.clear()
         self._query_schemas.clear()
-        await super().replace(factory, message)
-        self._default_actions()  # Re-add default actions
-        self._default_schemas()  # Re-add default subschemas
+        
+    async def _replace_populate(self):
+        self._default_schemas()
 
     def on_start(self, func):
         """
@@ -284,6 +284,35 @@ class BackActor(Actor):
     async def socksend(self, message):
         """ Sends a message to the websocket via the front actor """
         await self.send(self.associate, {"action": "socksend", "message": message})
+    
+    
+    async def _replace_cleanse(self):
+        """
+        We wish to add a query clearing step in the replacement process. This
+        will take place within the locked part of the process.
+        """
+        self._socket_queries = {}
+    
+    async def _replace_populate(self):
+        """
+        We need to send a message to the front actor to tell it to replace its
+        schemas. This needs to happen before the on_start method is run, so
+        it is entirely appropriate to do it here. Due to the lock, the last
+        replacement message sent corresponds to the last replacement operation.
+        RabbitMQ also ensures messages will be delivered in order. Therefore,
+        we will always have a consistent state eventually.
+        
+        Nota bene: We have previously sent the message to the front actor after
+        the replacement operation. This causes a bug since the back actor may
+        run another replacement operation in the on_start method, causing 
+        chains of replacements where the last one will take effect on the
+        back actor, and the first one on the front actor. Therefore the order of
+        operations is essential.
+        """
+        await self.send(self.associate,
+                        {"action": "replace_from_message",
+                         "factory": factory,
+                         "message": message})
         
     async def replace(self, factory, message):
         """
@@ -303,12 +332,7 @@ class BackActor(Actor):
         order, and the final front actor will not match the back actor. This
         bug has occurred in the past.
         """
-        await self.send(self.associate,
-                        {"action": "replace_from_message",
-                         "factory": factory,
-                         "message": message})
         await super().replace(self._replacement_factories[factory], message)
-        self._socket_queries = {}
 
         
     async def _reply_parser(self, reply):
@@ -367,6 +391,7 @@ class BackActor(Actor):
         """
         await super().run()
         self._monitors.add(self.associate)
+
 
 def WebsocketActor(socket_interface: WebsocketServerInterface,
                    messaging_system: Callable[[], MessageSystemInterface],

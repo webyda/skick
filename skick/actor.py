@@ -60,7 +60,10 @@ class Actor:
 
         self._main_sentinel = None # The sentinel for the main task
         self._monitors = set() # A set of monitors for this actor
-    
+        
+        self._replacement_state = -1 # A state variable for replacement
+        self._init_lock = asyncio.Lock() # Locks the actor during initialization
+        
     def _default_actions(self):
         """ Adds default actions """
         self.action("monitor")(self._monitor)
@@ -155,7 +158,10 @@ class Actor:
                 else:
                     pass
             elif message["action"] in ["receive_reply", "end_conversation"]:
-                await self._process_reply(message)
+                if message["cid"] in self._conversations:
+                    await self._process_reply(message)
+                else:
+                    pass # Ignore nonexistent conversations
             else:
                 pass
 
@@ -260,43 +266,134 @@ class Actor:
                                      **args
                                      })
 
-    async def replace(self,
+    async def _replace_cleanse(self):
+        """
+        Allows subclasses to perform any necessary cleanup in the replace method
+        while still being protected by the lock.
+        """
+        pass
+    
+    async def _replace_populate(self):
+        """
+        Allows subclasses to populate various attributes in the replace method
+        while still being protected by the lock.
+        """
+        pass
+    
+    async def _replace(self,
                       factory: Callable[["Actor", dict], Awaitable[None]],
-                      message: dict) -> None:
+                      message: dict,
+                      current_task) -> None:
         """
         Replaces the current actor's behaviors with another. Also replaces
         the state encapsulating closure. It does this by running the factory
         function of the new actor after having cleared the _actions dict.
+        
+        The replacement operation is somewhat problematic. This is because it
+        can be invoked not only as a result of an incoming message. Therefore,
+        we are not guaranteed sequential execution, and we need to be careful
+        not to cause various race conditions.
+        
+        The solution chosen is as follows: The clearing and repopulating of
+        the actor is protected by a mutex. This is necessary since there are
+        asynchronous operations in the process which may yield control to a
+        different task wich may simultaneously perform the same operation.
+        If we lock this part of the process, we can guarantee that the outcome
+        is deterministic.
+        
+        Once all the old state has been cleared out, we need to run the _on_start
+        method and start any daemons. This step has previously caused some
+        problems. For example, in some cases daemons could be started twice
+        if replacement occurred in the _on_start method. In order to avoid this,
+        we use the following strategy: We keep track of something called a
+        replacement state. Whenever a task acquires the _init_lock mutex, it
+        sets the state to 0, then, before releasing the mutex, it increases the
+        state to 1. It will run the daemons only if the state is still 1 after
+        the on_start method. If this was the case, it will set the state to 2
+        to prevent other tasks from running the same daemons.
         """
+        
+        # The followin is needed to prevent daemons from cancelling themselves
+        is_daemon = current_task in self._daemon_tasks
+        
         if isinstance(factory, str):
             # If the actor was spawned by a shard, it will inject a dictionary
             # of available factories. This allows us to replace actors using
             # actor type names. If not, the actor will halt and catch fire.
             factory = self._factories[factory][1]
+
+        async with self._init_lock:
+            self._replacement_state = 0
+            self._actions.clear()
+            await self._replace_cleanse()
+            await self._replace_populate()
+            self._default_actions()
+
+            for task in self._daemon_tasks.values():
+                if not task == current_task:
+                    task.cancel()
+                
+            self._daemons.clear()
+            self._daemon_tasks.clear()
             
-        self._actions.clear()
-        self._default_actions()
-        for task in self._daemon_tasks.values():
-            task.cancel()    
-        self._daemons.clear()
-        self._daemon_tasks.clear()
-        if self._on_stop:
-            await self._on_stop()
-        self._on_stop = None
-        self._on_start = None
+            
+            if self._on_stop:
+                await self._on_stop()
+            self._on_stop = None
+            self._on_start = None
 
-        for conversation in self._conversations:
-            await self.send(conversation.partner, {"action": "end_conversation",
-                                                   "cid": conversation.cid})
-            await conversation.close()
-        self._conversations.clear()
+            for conversation in self._conversations:
+                con = self._conversations[conversation]
+                await self.send(con.partner, {"action": "end_conversation",
+                                                    "cid": con.cid})
+                await con.close()
+            self._conversations.clear()
 
-        factory(self, message)
+
+            factory(self, message)
+            self._replacement_state = 1
+        
+        # Here we must explain a pertinent detail. From lines 19 and 20 of 
+        # Lib/asyncio/locks.py in the python source code, we can see that the
+        # context handler will not yield control to the event loop within the
+        # async __aexit__ method. Therefore, the program runs synchronously from
+        # self._replacement_state = 1 to the if self._on_start line. This means
+        # we do not need to assure ourselves that another task has not gotten
+        # halfway through its instance variable carnage phase before we get to
+        # our on_start method.
         if self._on_start:
             await self._on_start()
-        for name, func in self._daemons.items():
-            self._daemon_tasks[name] = self.loop.create_task(func())
-
+        
+        # However, at this point, we may have seen additional replace
+        # operations between the time we called self._on_start() and now.
+        if self._replacement_state == 1:
+            # Beneath there is an esoteric idea. Since we will be reading
+            # the daemons from self, it does not matter if *this* task's
+            # replace operation ran a different factory's self._on_start method
+            # we will always be reading the correct daemons here even if the
+            # associated factory function and _on_start methods were ran in a
+            # different task. Therefore, we choose to run the daemons as soon
+            # as possible, and then never again.
+            self._replacement_state = 2
+            for name, func in self._daemons.items():
+                self._daemon_tasks[name] = self.loop.create_task(func())
+        
+        if is_daemon:
+            current_task.cancel()
+            
+    async def replace(self, factory, message):
+        """
+        Replaces an actor with the specified actor. See actor._replace for
+        details.
+        
+        This method protects the _replace method so that it can be run from
+        a daemon. With this mechanism, the daemon can avoid breaking the actor
+        when performing replacements.
+        """
+        task = asyncio.current_task(loop=self.loop)
+        shielded_task = asyncio.shield(self._replace(factory, message, task))
+        await shielded_task
+        
     async def mailman(self) -> None:
         """
         This method is meant to attach some method of receiving messages to the
@@ -321,24 +418,31 @@ class Actor:
         """
 
         await self.mailman()
-
+        
         if self._on_start:
             await self._on_start()
-
-        self._daemon_tasks = {key: self.loop.create_task(item())
-                              for key, item in self._daemons.items()}
-        for task in self._daemon_tasks.values():
-            task.add_done_callback(self._error_callback)
+        
+        #Only do this if no replacement action has been initiated in the
+        #_on_start method. If we didn't ensure this, we would start them twice.
+        if self._replacement_state == -1:
+            self._replacement_state = 2
+            self._daemon_tasks = {key: self.loop.create_task(item())
+                                for key, item in self._daemons.items()}
+            #for task in self._daemon_tasks.values():
+            #    task.add_done_callback(self._error_callback)
+            
+        
         self._default_actions()
         self._message_task = self.loop.create_task(self._process_messages())
         self._main_sentinel = await self._sentinel(self._message_task,
-                                                   self._monitors,
-                                                   "main_task",
-                                                   exceptions=True,
-                                                   cancellations=True,
-                                                   done=True)
+                                                self._monitors,
+                                                "main_task",
+                                                exceptions=True,
+                                                cancellations=True,
+                                                done=True)
+        
         #self._message_task.add_done_callback(self._error_callback)
-
+                        
     async def stop(self) -> None:
         """ Kills the actor and cleans up """
         if self._message_task:
@@ -361,7 +465,7 @@ class Actor:
             else:
                 pass
         else:
-            pass
+            raise asyncio.CancelledError
 
     async def _sentinel(self,
                         task,
@@ -381,7 +485,6 @@ class Actor:
                 print(traceback.format_exc())
                 #print(f"Exception: {e}")
             if task.cancelled():
-                print("Cancelled")
                 if cancellations:
                     for monitor in monitors:
                         await self.send(monitor, {"action": "sentinel",
@@ -391,7 +494,6 @@ class Actor:
                 else:
                     pass
             elif task.exception():
-                print("Excepted")
                 if exceptions:
                     for monitor in monitors:
                         await self.send(monitor, {"action": "sentinel",
@@ -400,7 +502,6 @@ class Actor:
                                                   "exception": str(task.exception()),
                                                   "tag": task_tag})
             else:
-                print("Done")
                 if done:
                     for monitor in monitors:
                         await self.send(monitor, {"action": "sentinel",
