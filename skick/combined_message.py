@@ -59,10 +59,10 @@ class CombinedFactory(MessageSystemFactory):
     MessageSystemInterface object.
     """
 
-    def __init__(self, config: Any) -> None:
+    def __init__(self, config: Any, loop=None) -> None:
         
-        self.SimpleFactory = SimpleFactory(config)
-        self.RabbitFactory = RabbitFactory(config)
+        self.SimpleFactory = SimpleFactory(config, loop=loop)
+        self.RabbitFactory = RabbitFactory(config, loop=loop)
 
     def create(self) -> CombinedMessage:
         """

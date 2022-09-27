@@ -58,9 +58,9 @@ class Skick:
         print(kwargs)
         if "message_system" in kwargs:
             if isinstance(kwargs["message_system"], str):
-                self.msg_sys = RabbitFactory(kwargs["message_system"],
+                self.msg_sys = CombinedFactory(kwargs["message_system"],
                                              self.loop).create
-                print("Selected RabbitMessage")
+                print("Selected CombinedMessage")
             else:
                 pass
         else:

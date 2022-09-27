@@ -64,7 +64,7 @@ class SimpleFactory(MessageSystemFactory):
     """
     Uses a dictionary to transfer objects between actors.
     """
-    def __init__(self, config: Any) -> None:
+    def __init__(self, config: Any, loop=None) -> None:
         """ The user may leave a config object. We will simply ignore it. """
         self.queues = {}
 
