@@ -5,10 +5,12 @@ import asyncio
 import traceback
 from typing import Callable, Awaitable, Any
 from inspect import isasyncgenfunction
+from random import choice
 
 from schema import Schema
 
 from .message_system_interface import MessageSystemInterface
+from .conversation import Call, Respond
 
 def schemator(schema, func):
     sch = Schema(schema)
@@ -49,6 +51,8 @@ class Actor:
         self._daemons = {}
         self._on_start = None
         self._on_stop = None
+        
+        
         
         self._daemon_tasks = {}
         self._message_task = None
@@ -190,7 +194,71 @@ class Actor:
                     self._actions[name] = func
             return func
         return decorator
+    
+    async def register_service(self, service_name: str, shard = None):
+        """ A convenience method for registering services on the shard """
+        if shard or self._shard:
+            msg = {"action": "register_service",
+                   "service": service_name,
+                   "address": self.name}
+            
+            await self.send(shard or self._shard, msg)
+        else:
+            pass
+    
+    async def deregister_services(self, shard = None):
+        """ A convenience method for deregistering services on the shard """
+        if shard or self._shard:
+            msg = {"action": "unregister_service",
+                   "actor": self.name}
+            await self.send(shard or self._shard, msg)
+        else:
+            pass
 
+    async def sconverse(self, service, message, prototype):
+        """ Starts a conversation with some service provider. """
+        async def find_service(msg):
+            nonlocal service
+            response = yield Call(self._shard, {"action": "query_service",
+                                                "message": service})
+            if "error" not in response:
+                if response["local"]:
+                    provider = choice(response["local"])
+                    await self.converse({**message, service: provider}, prototype)
+                elif response["remote"]:
+                    provider = choice(response["remote"])
+                    await self.converse({**message, service: provider}, prototype)
+            else:
+                pass
+        await self.converse({}, find_service)
+        
+    async def _ssend(self, msg):
+        """
+        The actual conversation handler for the ssend method.
+        ideally we would cache these conversations, but for now we just
+        ask every time to avoid complexity. In reality, we could just
+        inject the service registry directly into te actor, but that would
+        go against the spirit of the actor model.
+        """
+        response = yield Call(self._shard, {"action": "query_service",
+                                            "message": msg["service"]})
+
+        if "error" not in response:
+            if response["local"]:
+                service = choice(response["local"])
+                await self.send(service, msg["message"])
+            elif response["remote"]:
+                service = choice(response["remote"])
+                await self.send(service, msg["message"])
+            else:
+                pass
+        else:
+            pass
+                
+    async def ssend(self, service, message):
+        """ Sends a message to a service """
+        await self.converse({"service": service, "message": message}, self._ssend)
+        
     async def converse(self, message, prototype):
         """
         Manually starts a conversation with a partner without necessarily
@@ -428,8 +496,8 @@ class Actor:
             self._replacement_state = 2
             self._daemon_tasks = {key: self.loop.create_task(item())
                                 for key, item in self._daemons.items()}
-            #for task in self._daemon_tasks.values():
-            #    task.add_done_callback(self._error_callback)
+            for task in self._daemon_tasks.values():
+                task.add_done_callback(self._error_callback)
             
         
         self._default_actions()

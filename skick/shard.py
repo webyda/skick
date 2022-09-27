@@ -199,9 +199,9 @@ def shard(actor_base: Type[Actor],
                            "message": str,
                            "sender": str,
                            "cid": str}).is_valid
+    
     @shard_actor.action("query_service")
     async def query_service(msg):
-        print(msg)
         yield Respond(msg)
         if query_schema(msg):
             serv = msg["message"]

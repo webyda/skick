@@ -56,4 +56,5 @@ exclude = [
   "examples",
   "*toml",
   "dist",
+  "mknew.sh",
   ]
