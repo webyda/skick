@@ -6,6 +6,8 @@ from .skick import Skick
 from .directory import Directory
 from .conversation import Call, Respond
 from .websocket_actor import SocketQuery
+from .actor import Actor
+from .addressing import get_address
 
 __all__ = [
     "Skick", # A facade orchestrating the whole system
@@ -13,6 +15,8 @@ __all__ = [
     "Call", # A class used to initiate calls to other actors
     "Respond", # A class used to respond to calls from other actors
     "SocketQuery", # A class used to query a websocket client
+    "Actor",
+    "get_address",
     ]
 
 if __name__ == "__main__":

@@ -35,9 +35,9 @@ class CombinedMessage(MessageSystemInterface):
         RabbitMessage.send().
         """
         if address in self.SimpleMessage.queues:
-            await self.SimpleMessage.send(address, message)
+            return await self.SimpleMessage.send(address, message)
         else:
-            await self.RabbitMessage.send(address, message)
+            return await self.RabbitMessage.send(address, message)
     
     async def register_shard(self, address):
         """

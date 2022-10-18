@@ -40,7 +40,7 @@ class Actor:
     """
     def __init__(self, name: str,
                  message_system: MessageSystemInterface = None,
-                 queue_size: int = 100,
+                 queue_size: int = 10000,
                  loop: asyncio.AbstractEventLoop = None,
                  shard: str = None) -> None:
         self.name = name
@@ -67,6 +67,8 @@ class Actor:
         
         self._replacement_state = -1 # A state variable for replacement
         self._init_lock = asyncio.Lock() # Locks the actor during initialization
+        
+        self._injected_spawn = None
         
     def _default_actions(self):
         """ Adds default actions """
@@ -309,11 +311,11 @@ class Actor:
         """
         self._on_stop = func
         return func
-
+    
     async def spawn(self,
                     factory: str,
                     message: dict,
-                    same_shard: bool=True, # Ignored for now
+                    remote: str="mixed", # Ignored for now
                     name: str=None,
                     add_monitor: bool = True):
 
@@ -321,18 +323,39 @@ class Actor:
         This method spawns an actor using the given factory,
         sending the prescribed message to it.
         """
-        args = {}
-        if name:
-            args["name"] = name
         if add_monitor:
-            args["add_monitor"] = self.name
-
-        if self._shard:
-            await self.send(self._shard, {"action": "spawn",
-                                     "type": factory,
-                                     "message": message,
-                                     **args
-                                     })
+            if isinstance(add_monitor, bool):
+                monitors = [self.name]
+            elif isinstance(add_monitor, str):
+                monitors = [add_monitor]
+            elif isinstance(add_monitor, list):
+                monitors = add_monitor
+            else:
+                monitors = None
+        else:
+            monitors = None
+            
+        if self._injected_spawn:
+            return await self._injected_spawn(factory,
+                                              message=message,
+                                              remote=remote,
+                                              name=name,
+                                              monitors=monitors)
+        else:
+            args = {}
+            if name:
+                args["name"] = name
+            args["monitors"] = monitors
+            
+            if self._shard:
+                await self.send(self._shard, {"action": "spawn",
+                                        "type": factory,
+                                        "message": message,
+                                        **args
+                                        })
+                return name or ""
+            else:
+                return None
 
     async def _replace_cleanse(self):
         """
@@ -476,7 +499,7 @@ class Actor:
         relies on an abstraction of a messaging system which must be injected
         on instantiation.
         """
-        await self._message_system.send(address, message)
+        return await self._message_system.send(address, message)
 
     async def run(self) -> None:
         """
@@ -484,7 +507,7 @@ class Actor:
         abstract base classes, we need to instead perform runtime checks to
         ensure that the actor is properly initialized.
         """
-
+        
         await self.mailman()
         
         if self._on_start:
@@ -502,6 +525,7 @@ class Actor:
         
         self._default_actions()
         self._message_task = self.loop.create_task(self._process_messages())
+        
         self._main_sentinel = await self._sentinel(self._message_task,
                                                 self._monitors,
                                                 "main_task",

@@ -79,7 +79,7 @@ class RabbitMessage(MessageSystemInterface):
             """
             try:
                 msg = json.loads(message.body.decode())
-                actor.queue.put_nowait(msg)
+                await actor.queue.put(msg)
                 await message.ack()
             except asyncio.QueueFull:
                 await message.nack()

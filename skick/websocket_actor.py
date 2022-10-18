@@ -10,7 +10,7 @@ and closures and assembles the final actors.
 
 import asyncio
 from typing import Callable
-from secrets import token_urlsafe
+from secrets import token_hex
 from json import JSONDecodeError, dumps, loads
 
 from schema import Schema, Const, And, Or
@@ -19,6 +19,7 @@ from .actor import Actor
 from .websocket_interface import WebsocketConnectionObject, WebsocketServerInterface
 from .message_system_interface import MessageSystemInterface
 
+from .addressing import get_address
 
 class SocketQuery():
     """
@@ -405,7 +406,7 @@ def WebsocketActor(socket_interface: WebsocketServerInterface,
     subsession_types = {}
     reverse_subsessions = {}
 
-    socket_actor = Actor(token_urlsafe(),
+    socket_actor = Actor(get_address(),
                          message_system=messaging_system(),
                          shard=shard,
                          loop=loop)
@@ -518,11 +519,11 @@ def WebsocketActor(socket_interface: WebsocketServerInterface,
             # First we instantiate the actors and provide them with some
             # necessary information.
             factory = session_types[handshake]
-            receptionist = FrontActor(token_urlsafe(),
+            receptionist = FrontActor(get_address(),
                                       message_system=messaging_system(),
                                       shard=shard,
                                       loop=loop)
-            session_actor = BackActor(token_urlsafe(),
+            session_actor = BackActor(get_address(),
                                       message_system=messaging_system(),
                                       shard=shard,
                                       loop=loop)
@@ -534,6 +535,9 @@ def WebsocketActor(socket_interface: WebsocketServerInterface,
 
             receptionist.associate = session_actor.name
             session_actor.associate = receptionist.name
+            
+            receptionist._injected_spawn = socket_actor._injected_spawn
+            session_actor._injected_spawn = socket_actor._injected_spawn
 
             factory(receptionist, message)
             factory(session_actor, message)

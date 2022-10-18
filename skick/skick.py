@@ -9,13 +9,14 @@ instances, requires no parameters.
 """
 
 import asyncio
-from secrets import token_hex
+import uvloop
 
+from .addressing import get_address
 # Import the messaging system interfaces
 from .simple_message import SimpleFactory
-from .rabbit_message import RabbitFactory
-from .combined_message import CombinedFactory
-
+#from .rabbit_message import RabbitFactory
+#from .combined_message import CombinedFactory
+from .routed_message import RoutedFactory
 
 # Import all distributed dictionaries
 from .simple_hash import SimpleHash
@@ -43,7 +44,7 @@ class Skick:
         else:
             self.on_stop = None
         
-        self.loop = asyncio.new_event_loop()
+        self.loop = uvloop.new_event_loop()
         asyncio.set_event_loop(self.loop)
         
         if "dict_type" in kwargs:
@@ -55,26 +56,20 @@ class Skick:
         else:
             self.hash = SimpleHash
         self.hash.loop=self.loop
-        print(kwargs)
+        
         if "message_system" in kwargs:
             if isinstance(kwargs["message_system"], str):
-                self.msg_sys = CombinedFactory(kwargs["message_system"],
+                self.msg_sys = RoutedFactory(kwargs["message_system"],
                                              self.loop).create
-                print("Selected CombinedMessage")
             else:
                 pass
         else:
-            print("Selected SimpleMessage")
             self.msg_sys = SimpleFactory({}).create
             
-        if "shard_name" in kwargs:
-            name = kwargs["shard_name"]
-        else:
-            name = None
             
         self.shard = Shard(Actor,
                            self.msg_sys,
-                           name if name else token_hex(),
+                           get_address(is_shard=True),
                            self.loop)
         
         self.name = self.shard.name
@@ -102,6 +97,7 @@ class Skick:
                                            loop=self.loop)
             
         if self.ws_actor:
+            self.ws_actor._injected_spawn = self.shard._injected_spawn
             self.session = self.ws_actor.session
             self.subsession = self.ws_actor.subsession
             self.handshake = self.ws_actor.handshake
@@ -130,9 +126,7 @@ class Skick:
         else:
 
             pass
-        
         self.tasks["shard"] = await self.shard.run()
-        
         if self.ws_actor:
             self.tasks["websocket"] = await self.ws_actor.run()
         else:
