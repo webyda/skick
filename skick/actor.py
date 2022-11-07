@@ -11,6 +11,7 @@ from schema import Schema
 
 from .message_system_interface import MessageSystemInterface
 from .conversation import Call, Respond
+from .import terminate
 
 def schemator(schema, func):
     sch = Schema(schema)
@@ -40,7 +41,7 @@ class Actor:
     """
     def __init__(self, name: str,
                  message_system: MessageSystemInterface = None,
-                 queue_size: int = 10000,
+                 queue_size: int = 100,
                  loop: asyncio.AbstractEventLoop = None,
                  shard: str = None) -> None:
         self.name = name
@@ -49,12 +50,14 @@ class Actor:
         self._actions = {}
         self._conversation_prototypes = {}
         self._daemons = {}
+        self._daemon_watchers = {}
         self._on_start = None
         self._on_stop = None
         
         
         
         self._daemon_tasks = {}
+        self._daemon_watcher_tasks = {}
         self._message_task = None
         self._mailman_cleanup = None
         self._message_system = message_system
@@ -69,10 +72,38 @@ class Actor:
         self._init_lock = asyncio.Lock() # Locks the actor during initialization
         
         self._injected_spawn = None
+        self._sentinel_handlers = {} # A list of handlers to use for sentinel messages
+        self._default_sentinel = None # A default handlar for sentinel messages
+        self.stopped = None
         
+    def sentinel_handler(self, address, handler):
+        """ Registers a handler for a sentinel message """
+        self._sentinel_handlers[address] = handler
+    
+    def default_sentinel(self, handler):
+        """ A decorator for registering a default sentinel handler """
+        self._default_sentinel = handler
+        return handler
+    
     def _default_actions(self):
         """ Adds default actions """
         self.action("monitor")(self._monitor)
+        self.action("sentinel")(self._receive_sentinel_info)
+    
+    async def _receive_sentinel_info(self, message):
+        """
+        This is a message handlar for receiving notifications of monitored actors
+        dying. It attempts to invoke handlers registered for a particular actor,
+        then falls back to a default handler.
+        """
+        sender = message.get("address", None)
+        if sender in self._sentinel_handlers:
+            await self._sentinel_handlers[sender](message)
+        elif self._default_sentinel:
+            await self._default_sentinel(message)
+        else:
+            print("No registered handler")
+            
         
     async def _process_reply(self, message: dict) -> None:
         """
@@ -239,7 +270,7 @@ class Actor:
         The actual conversation handler for the ssend method.
         ideally we would cache these conversations, but for now we just
         ask every time to avoid complexity. In reality, we could just
-        inject the service registry directly into te actor, but that would
+        inject the service registry directly into the actor, but that would
         go against the spirit of the actor model.
         """
         response = yield Call(self._shard, {"action": "query_service",
@@ -284,14 +315,71 @@ class Actor:
             return gen
         return decorator
 
-    def daemon(self, name):
+    def daemon(self, name,
+               dead_mans_switch = True,
+               restart = False,
+               on_failure = None):
         """
-        Registers a daemon that will be launched as a task when the actor
+        Registers a daemon that will be started as a task when the actor
         starts, and which will be cancelled when the actor stops or is
         replaced.
+        
+        There are a few different ways to handle failures and cancellations:
+        
+        1. Dead Man's Switch: If the daemon terminates, the entire actor will
+           die with it. This is the default behavior.
+        2. Restart: If the daemon terminates, it will be restarted.
+        3. Callback: If the daemon terminates, the on_failure method will be
+           This can be combined with the two above if desired.
+        4. Ignore: If the daemon terminates, do nothing.
         """
         def decorator(func):
             self._daemons[name] = func
+            if any((dead_mans_switch, restart, on_failure)):
+                async def watcher():
+                    if dead_mans_switch and not restart:
+                        try:
+                            await self._daemon_tasks[name]
+                        except asyncio.CancelledError:
+                            raise
+                        except:
+                            """
+                            Here, we have to provide a blanket except clause
+                            so that the exception doesn't kill the watcher
+                            task itself. In the future we might do something
+                            constructive with it.
+                            """
+                            pass
+        
+                        if on_failure:
+                            await on_failure()
+                        await self.stop()
+                        
+                    elif restart:
+                        while True:
+                            try:
+                                await self._daemon_tasks[name]
+                            except asyncio.CancelledError:
+                                raise
+                            except:
+                                """
+                                Here, we have to provide a blanket except clause
+                                so that the exception doesn't kill the watcher
+                                task itself. In the future we might do something
+                                constructive with it.
+                                """
+                                pass
+                            
+                            if on_failure:
+                                await on_failure()
+                            self._daemon_tasks[name] = self.loop.create_task(func())
+                            
+                    elif on_failure:
+                        await self._daemon_tasks[name]
+                        await on_failure()
+                self._daemon_watchers[name] = watcher
+            else:
+                self._daemon_watchers[name] = None
             return func
         return decorator
 
@@ -371,10 +459,31 @@ class Actor:
         """
         pass
     
+    def _start_daemons(self):
+        daemon_pairs = zip(self._daemons.items(), self._daemon_watchers.items())
+        for (name, daemon), (_, watcher) in daemon_pairs:
+            self._daemon_tasks[name] = self.loop.create_task(daemon())
+            if watcher:
+                self._daemon_watchers[name] = self.loop.create_task(watcher())
+            else:
+                self._daemon_watchers[name] = None
+                
+    def _stop_daemons(self):
+        current = asyncio.current_task()
+        for (name, watcher) in self._daemon_watchers.items():
+            if watcher:
+                watcher.cancel()
+        for (name, daemon) in self._daemon_tasks.items():
+            if not daemon == current:
+                daemon.cancel()
+        
+        self._daemon_watchers.clear()
+        self._daemon_tasks.clear()
+        return current
+                
     async def _replace(self,
                       factory: Callable[["Actor", dict], Awaitable[None]],
-                      message: dict,
-                      current_task) -> None:
+                      message: dict) -> None:
         """
         Replaces the current actor's behaviors with another. Also replaces
         the state encapsulating closure. It does this by running the factory
@@ -405,7 +514,7 @@ class Actor:
         """
         
         # The followin is needed to prevent daemons from cancelling themselves
-        is_daemon = current_task in self._daemon_tasks
+        is_daemon = asyncio.current_task() in self._daemon_tasks.values()
         
         if isinstance(factory, str):
             # If the actor was spawned by a shard, it will inject a dictionary
@@ -420,13 +529,9 @@ class Actor:
             await self._replace_populate()
             self._default_actions()
 
-            for task in self._daemon_tasks.values():
-                if not task == current_task:
-                    task.cancel()
-                
-            self._daemons.clear()
-            self._daemon_tasks.clear()
+            task = self._stop_daemons()
             
+            self._daemons.clear()
             
             if self._on_stop:
                 await self._on_stop()
@@ -436,10 +541,12 @@ class Actor:
             for conversation in self._conversations:
                 con = self._conversations[conversation]
                 await self.send(con.partner, {"action": "end_conversation",
-                                                    "cid": con.cid})
+                                              "cid": con.cid})
                 await con.close()
             self._conversations.clear()
-
+            
+            self._default_sentinel = None
+            self._sentinel_handlers.clear()
 
             factory(self, message)
             self._replacement_state = 1
@@ -466,11 +573,10 @@ class Actor:
             # different task. Therefore, we choose to run the daemons as soon
             # as possible, and then never again.
             self._replacement_state = 2
-            for name, func in self._daemons.items():
-                self._daemon_tasks[name] = self.loop.create_task(func())
+            self._start_daemons()
         
         if is_daemon:
-            current_task.cancel()
+            task.cancel()
             
     async def replace(self, factory, message):
         """
@@ -481,8 +587,7 @@ class Actor:
         a daemon. With this mechanism, the daemon can avoid breaking the actor
         when performing replacements.
         """
-        task = asyncio.current_task(loop=self.loop)
-        shielded_task = asyncio.shield(self._replace(factory, message, task))
+        shielded_task = asyncio.shield(self._replace(factory, message))
         await shielded_task
         
     async def mailman(self) -> None:
@@ -517,10 +622,7 @@ class Actor:
         #_on_start method. If we didn't ensure this, we would start them twice.
         if self._replacement_state == -1:
             self._replacement_state = 2
-            self._daemon_tasks = {key: self.loop.create_task(item())
-                                for key, item in self._daemons.items()}
-            for task in self._daemon_tasks.values():
-                task.add_done_callback(self._error_callback)
+            self._start_daemons()
             
         
         self._default_actions()
@@ -535,24 +637,31 @@ class Actor:
         
         #self._message_task.add_done_callback(self._error_callback)
                         
-    async def stop(self) -> None:
+    async def _stop(self) -> None:
         """ Kills the actor and cleans up """
         if self._message_task:
             self._message_task.cancel()
 
-        for task in self._daemon_tasks.values():
-            task.cancel()
+        self._stop_daemons()
 
         if self._on_stop:
             await self._on_stop()
 
         if self._mailman_cleanup:
             await self._mailman_cleanup()
-
+            
+    async def stop(self):
+        try:
+            if not self.stopped:
+                self.stopped = terminate.add_stopper(self._stop(), self.loop)
+            await self.stopped
+        except:
+            print(traceback.print_exc)
+            
     def _error_callback(self, task):
         if not task.cancelled():
             if exception := task.exception():
-                print(traceback.print_exc())#exception)
+                print(traceback.print_exc())
                 raise exception
             else:
                 pass
@@ -563,16 +672,21 @@ class Actor:
                         task,
                         monitors,
                         task_tag,
+                        stop = True,
                         exceptions = True,
                         cancellations=False,
                         done = False):
         """
-        Spawns a task to watch over task and report to its monitors when the
-        task is finished for one reason or another (typically exceptions)
+        Spawns a task to watch over another task and report to its monitors when the
+        task is finished.
         """
         async def reporter():
             try:
                 await task
+                if stop:
+                    await self.stop()
+                else:
+                    pass
             except BaseException as e:
                 print(traceback.format_exc())
                 #print(f"Exception: {e}")

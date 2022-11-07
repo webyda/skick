@@ -5,8 +5,7 @@ one.
 """
 
 from typing import Any
-from orjson import loads, dumps
-import json
+from copy import deepcopy
 
 from .message_system_interface import MessageSystemInterface, MessageSystemFactory
 
@@ -27,11 +26,20 @@ class SimpleMessage(MessageSystemInterface):
         dictionary of queues.
         """
         self.queues[actor.name] = actor.queue
-        
+        async def cleanup():
+            print(f"{len(self.queues)} queues before cleanup")
+            if actor.name in self.queues:
+                del self.queues[actor.name]
+            print(f"{len(self.queues)} queues after cleanup")
+        return cleanup
+     
     async def register_shard(self, address):
         """ Registers the shard """
         self.shard = address
-    
+        
+    async def unregister_shard(self, address):
+        self.shard = None
+        
     async def send(self, address, message):
         if self.send_func:
             return await self.send_func(address, message)
@@ -65,26 +73,18 @@ class SimpleFactory(MessageSystemFactory):
     async def send(self, address: str, message: dict) -> None:
         """
         Simply selects the queue from the dictionary and appends the message.
-        We convert the message to json and then back again, because if we don't
-        we may experience bugs where the programmer relied on the message being
-        serialized and deserialized. A concrete example from testing is this:
-        an actor contains a list of strings. The actor sends the list to its
-        subscribers. The subscribers then append items to their local version
-        of the list after the actor sends updates. In this case, unless we
-        perform a deep copy, SimpleMessage will send a *reference* to the
-        original list, and the same item will appear many times because
-        the updates are appended once per subscriber. This will not happen
-        in messaging systems that transmit JSON to a server. In order to
-        replicate the exact behavior of such servers, we perform the same
-        serialization-deserialization procedure.
+        We make a deep copy of the dictionary to prevent bugs arising from
+        the mutable nature of dictionaries.
+        
+        Previously, we serialized and deserialized the message in order to
+        simulate what a remote message system would do. This, however, is
+        probably a cleaner solution and may provide a slight performance benefit.
         """
         
         if address in self.queues:
             try:
-                self.queues[address].put_nowait(loads(dumps(message)))
+                self.queues[address].put_nowait(deepcopy(message))
             except asyncio.QueueFull:
-                return False
-            except json.JSONDecodeError:
                 return False
             else:
                 return True

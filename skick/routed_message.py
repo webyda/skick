@@ -61,6 +61,10 @@ class RoutedMessage(MessageSystemInterface):
 
         await self.factory.queue.consume(self.factory.transfer,
                                          consumer_tag=shard)
+    
+    async def unregister_shard(self, address):
+        # Kill it with fire please.
+        await self.factory.queue.delete(if_unused=False, if_empty=False)
         
     async def broadcast(self, message):
         """

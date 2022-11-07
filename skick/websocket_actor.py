@@ -20,6 +20,9 @@ from .websocket_interface import WebsocketConnectionObject, WebsocketServerInter
 from .message_system_interface import MessageSystemInterface
 
 from .addressing import get_address
+from .rate_limiter import TokenBucket, RateExceeded
+
+from . import terminate
 
 class SocketQuery():
     """
@@ -51,6 +54,8 @@ class FrontActor(Actor):
         self._queries = {}
         self._default_schemas()
         
+        self._ws_limiter = TokenBucket()
+        
     def _default_actions(self):
         """
         Adds default behaviors for accepting communications from the assoicated
@@ -77,9 +82,7 @@ class FrontActor(Actor):
         self.query_schema("float", float)
         self.query_schema("bool", bool)
         self.query_schema("list", [str, int, float, bool])
-        
-        
-        
+    
     def query_schema(self, name, schema):
         self._query_schemas[name] = Schema(schema)
     
@@ -206,6 +209,13 @@ class FrontActor(Actor):
         """ Listens to the websocket """
         async for message in self._websocket:
             try:
+                waited = await self._ws_limiter.waiter()
+                if waited:
+                    print("Socket was punished")
+            except:
+                await self.stop()
+                break
+            try:
                 message = loads(message)
             except JSONDecodeError:
                 await self.socksend({"message": {"action": "error"}})
@@ -227,7 +237,7 @@ class FrontActor(Actor):
             else:
                 await self.socksend({"message": {"action": "error", "type": "No action specified"}})
                 
-        await super().stop()
+        await self.stop()
 
     async def run(self):
         await super().run()
@@ -240,11 +250,11 @@ class FrontActor(Actor):
                                                      done=False)
         self._monitors.add(self.associate)
 
-    async def stop(self):
+    async def _stop(self):
         """ Stops the websocket listener """
         if self._socket_task:
             self._socket_task.cancel()
-        await super().stop()
+        await super()._stop()
 
 
 class BackActor(Actor):
@@ -411,7 +421,8 @@ def WebsocketActor(socket_interface: WebsocketServerInterface,
                          shard=shard,
                          loop=loop)
 
-    subactors = set()
+    receptionists = {}
+    session_actors = {}
 
     def subsession(name):
         """
@@ -543,10 +554,13 @@ def WebsocketActor(socket_interface: WebsocketServerInterface,
             factory(session_actor, message)
 
             await receptionist.run()
-
             await session_actor.run()
-
-            subactors.add((receptionist, session_actor))
+            
+            await receptionist._monitor(socket_actor.name)
+            await session_actor._monitor(socket_actor.name)
+            
+            receptionists[receptionist.name] = receptionist
+            session_actors[session_actor.name] = session_actor
             
             await asyncio.wait_for(receptionist._socket_task, None)
 
@@ -570,15 +584,23 @@ def WebsocketActor(socket_interface: WebsocketServerInterface,
     old_stop = socket_actor.stop
 
     async def new_stop():
-        nonlocal subactors
         running_server.close()
-        for (front, back) in subactors:
-            await front.stop()
-            await back.stop()
-
+        for receptionist in receptionists.values():
+            await receptionist.stop()
+        for session_actor in session_actors.values():
+            await session_actor.stop()
         await old_stop()
 
     socket_actor.run = new_run
     socket_actor.stop = new_stop
+
+    @socket_actor.default_sentinel
+    async def default_sentinel(msg):
+        if msg["address"] in receptionists:
+            print("Connection severed")
+            del receptionists[msg["address"]]
+        elif msg["address"] in session_actors:
+            print("Session actor stopped") 
+            del session_actors[msg["address"]]
 
     return socket_actor

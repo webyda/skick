@@ -10,10 +10,11 @@ import asyncio
 
 from random import choice, random, sample
 from math import log
+from traceback import print_exc
 from typing import Callable, Type, Awaitable
 from itertools import chain
 from functools import reduce
-from time import time, perf_counter
+from time import monotonic, time, perf_counter
 
 from schema import Schema, Const, Optional, Or
 
@@ -23,6 +24,15 @@ from .conversation import Respond
 from .info_bucket import InfoBucket
 from .addressing import get_address
 
+from . import terminate
+
+VIKING_POEM = """Dock klagar jag ej mina dagars tal:
+Snabb var, men god, deras fart.
+Det går ej en väg blott till gudarnas sal:
+Och bättre är hinna den snart.
+Med dödssång de ljudande böljor gå;
+På dem har jag levat – min grav skall jag få
+Uti havet."""
     
 def shard(actor_base: Type[Actor],
           message_factory: Callable[[], Awaitable[MessageSystemInterface]],
@@ -47,7 +57,7 @@ def shard(actor_base: Type[Actor],
     remote_factories = {} # Keeps track of which shards can spawn which actors
             
     
-    def update_bucket():
+    def update_bucket(kill=False):
         """ Updates the info bucket with local information """
         timestamp = time()
         for service in local_services:
@@ -56,17 +66,17 @@ def shard(actor_base: Type[Actor],
                                                "service": service,
                                                "address": provider},
                                        "timestamp": timestamp,
-                                       "info": True})
+                                       "info": not kill})
         
         infos.add_information({"key": {"shard": shard_actor.name},
                                "timestamp": timestamp,
-                               "info": True})
+                               "info": not kill})
         
         for factory in factories:
             infos.add_information({"key": {"shard": shard_actor.name,
                                            "factory": factory},
                                    "timestamp": timestamp,
-                                   "info": True})
+                                   "info": not kill})
     
     def decode_bucket():
         """ Extracts information from the bucket to update local values """
@@ -325,6 +335,7 @@ def shard(actor_base: Type[Actor],
             actor_factory(actor, message)
 
             actors[name] = actor
+            await actor._monitor({"address": shard_actor.name})
             if monitors:
                 if isinstance(monitors, str):
                     await actor._monitor({"address": monitors})
@@ -434,28 +445,75 @@ def shard(actor_base: Type[Actor],
 
     shard_actor.actor = factory  # Exposes an interface to the programmer
     
+    @shard_actor.default_sentinel
+    async def default_sentinel(msg):
+        """
+        Responsible for handling the death of spawned actors in a responsible
+        and dignified manner by removing them from the list of actors and
+        by announcing their death through an obituary in the info_bucket if
+        they provided a service.
+        """
+        addr = msg.get("address", None)
+        
+        if addr:
+            if addr in actors:
+                del actors[addr]
+            
+            
+            await unregister({"actor": addr})
+        else:
+            pass
+        
+    message_watcher = None
     @shard_actor.on_start
     async def onstart():
+        nonlocal message_watcher
+        # First we need to announce the presence of the shard to the messaging system
         await msg_sys.register_shard(shard_actor.name)
-    
+        
+        # Second, we need to attach a watcher to the _message_task of the shard
+        # so that it can handle its own exceptions. This is necessary because
+        # the shard is the top actor in the supervision tree.
+        async def watcher():
+            try:
+                await shard_actor._message_task
+            except Exception as e:
+                print(f"Shard {shard_actor.name} died with exception {e}")
+                await shard_actor.stop()
+        
+        message_watcher = shard_actor.loop.create_task(watcher())
+        
     @shard_actor.on_stop
     async def onstop():
-        """ Broadcasts the shutdown to the rest of the cluster. """
-        msg = {
-            "action": "receive_info",
-            **encode(shard_actor.name,
-                     {},
-                     {},
-                     local_services,
-                     {},
-                     {shard_actor.name: list(reduce(set.union,
-                                               local_services.values(),
-                                               set()))}),
-            "purge": True,
-            "broadcaster": shard_actor.name,
-            }
-        await msg_sys.broadcast(msg)
-        
+        """
+        Creates and broadcasts the required obituaries and kills the actors
+        """
+        try:
+            if shard_actor.ws_actor:
+                #If a kind soul has injected a websocket actor. Kill it.
+                await shard_actor.ws_actor.stop()
+
+            update_bucket(kill=True)
+            
+            for actor in actors.values():
+                await actor.stop()
+            
+            await msg_sys.unregister_shard(shard_actor.name)
+            
+            # Say a final goodbye to all the old shard pals
+            info_batch = infos.export()
+            
+            await msg_sys.broadcast({"action": "receive_info",
+                                     "batch": info_batch,
+                                     "purge": False,
+                                     "broadcaster": shard_actor.name})
+            
+            # Say goodbye to the boys on stdout
+            print(VIKING_POEM)
+            await terminate.terminate()
+            
+        except Exception as e:
+            print(print_exc())
     return shard_actor
 
 

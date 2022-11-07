@@ -10,6 +10,8 @@ instances, requires no parameters.
 
 import asyncio
 import uvloop
+from ssl import create_default_context, Purpose
+from signal import SIGTERM, SIGINT
 
 from .addressing import get_address
 # Import the messaging system interfaces
@@ -30,6 +32,9 @@ from .actor import Actor
 from .websocket_actor import WebsocketActor
 from .shard import Shard
 
+# import the stopping mechanism
+from . import terminate
+
 
 class Skick:
     """
@@ -46,6 +51,7 @@ class Skick:
         
         self.loop = uvloop.new_event_loop()
         asyncio.set_event_loop(self.loop)
+        self.switch = terminate.set_loop(self.loop)
         
         if "dict_type" in kwargs:
             if isinstance(kwargs["dict_type"], str):
@@ -71,7 +77,7 @@ class Skick:
                            self.msg_sys,
                            get_address(is_shard=True),
                            self.loop)
-        
+        self.shard.ws_actor = None
         self.name = self.shard.name
         
         
@@ -91,7 +97,28 @@ class Skick:
             else:
                 self.ws_actor = None
         else:
-            self.ws_actor = WebsocketActor(PlainWebsocket(ws_host, ws_port),
+            
+            ssl_context = kwargs.get("ssl", None)
+            if isinstance(ssl_context, str):
+                """ In this case, we have been given a pem file """
+                pem = ssl_context
+                ssl_context = create_default_context(Purpose.CLIENT_AUTH)
+                ssl_context.load_cert_chain(pem)
+    
+            elif isinstance(ssl_context, tuple):
+                """ IN this case we have a pem file and a password """
+                pem, pwd = ssl_context
+                ssl_context = create_default_context(Purpose.CLIENT_AUTH)
+                ssl_context.load_cert_chain(certfile=pem, password=pwd)
+            
+            ws_opts = {"ssl": ssl_context,
+                       "max_size": 2**16,
+                       "max_queue": 2**3,
+                       "read_limit": 2**16,
+                       **kwargs.get("websocket_options", {}),
+                       }
+            print(ws_opts)
+            self.ws_actor = WebsocketActor(PlainWebsocket(ws_host, ws_port, **ws_opts),
                                            self.msg_sys,
                                            shard=self.shard.name,
                                            loop=self.loop)
@@ -101,6 +128,7 @@ class Skick:
             self.session = self.ws_actor.session
             self.subsession = self.ws_actor.subsession
             self.handshake = self.ws_actor.handshake
+            
         else:
             def tmpsess(name):
                 def decorator(func):
@@ -124,9 +152,12 @@ class Skick:
         if self.hash == RedisHash:
             await RedisHash.set_pool(self.redis_url)
         else:
-
             pass
+        
+        if self.ws_actor:
+            self.shard.ws_actor = self.ws_actor
         self.tasks["shard"] = await self.shard.run()
+        
         if self.ws_actor:
             self.tasks["websocket"] = await self.ws_actor.run()
         else:
@@ -136,13 +167,24 @@ class Skick:
             await self.on_start(self.shard)
     
     def start(self):
-        self.loop.create_task(self._run())
-        self.loop.run_forever()
-        
+            def signal_handler():
+                self.loop.create_task(self.stop())
+            self.loop.add_signal_handler(SIGTERM, signal_handler)
+            self.loop.add_signal_handler(SIGINT, signal_handler)
+            self.loop.create_task(self._run())
+            print(self.switch)
+            print(self.switch.done())
+            self.loop.run_until_complete(self.switch)
+            
+            
     async def stop(self):
         """ Allows us to stop the actor system """
-        await self.on_stop()
-        await self.ws_actor.stop()
+        if self.on_stop:
+            await self.on_stop()
+        if self.ws_actor:
+            self.shard.ws_actor = None
+            await self.ws_actor.stop()
+            
         await self.shard.stop()
     
     def add_directory(self, directory):
