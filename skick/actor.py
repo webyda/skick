@@ -11,7 +11,8 @@ from schema import Schema
 
 from .message_system_interface import MessageSystemInterface
 from .conversation import Call, Respond
-from .import terminate
+from .cluster import cluster_data
+from . import terminate
 
 def schemator(schema, func):
     sch = Schema(schema)
@@ -53,28 +54,49 @@ class Actor:
         self._daemon_watchers = {}
         self._on_start = None
         self._on_stop = None
-        
-        
-        
+
         self._daemon_tasks = {}
         self._daemon_watcher_tasks = {}
         self._message_task = None
         self._mailman_cleanup = None
         self._message_system = message_system
         self._shard = shard  # lets us record the name of the shard
-        self._factories = None #  this may be injected by a shard
         self._conversations = {} # A list of active "conversations"
 
         self._main_sentinel = None # The sentinel for the main task
         self._monitors = set() # A set of monitors for this actor
-        
+
         self._replacement_state = -1 # A state variable for replacement
         self._init_lock = asyncio.Lock() # Locks the actor during initialization
-        
+
         self._injected_spawn = None
         self._sentinel_handlers = {} # A list of handlers to use for sentinel messages
         self._default_sentinel = None # A default handlar for sentinel messages
         self.stopped = None
+    
+    def get_service(self, name, local="mixed"):
+        try:
+            match local:
+                case "mixed":
+                        return choice(cluster_data.local_services.get(name, None)
+                                      or cluster_data.remote_services.get(name, None))
+                    
+                case "local":
+                    return choice(cluster_data.local_services.get(name, None))
+                
+                case "remote":
+                    return choice(cluster_data.remote_services.get(name, None))
+                
+                case _:
+                    return None
+        except TypeError:
+            return None
+        
+    def register_service(self, name):
+        cluster_data.add_service(name, self.name)
+    
+    def unregister_services(self):
+        cluster_data.delete_service(self.name)
         
     def sentinel_handler(self, address, handler):
         """ Registers a handler for a sentinel message """
@@ -227,70 +249,6 @@ class Actor:
                     self._actions[name] = func
             return func
         return decorator
-    
-    async def register_service(self, service_name: str, shard = None):
-        """ A convenience method for registering services on the shard """
-        if shard or self._shard:
-            msg = {"action": "register_service",
-                   "service": service_name,
-                   "address": self.name}
-            
-            await self.send(shard or self._shard, msg)
-        else:
-            pass
-    
-    async def deregister_services(self, shard = None):
-        """ A convenience method for deregistering services on the shard """
-        if shard or self._shard:
-            msg = {"action": "unregister_service",
-                   "actor": self.name}
-            await self.send(shard or self._shard, msg)
-        else:
-            pass
-
-    async def sconverse(self, service, message, prototype):
-        """ Starts a conversation with some service provider. """
-        async def find_service(msg):
-            nonlocal service
-            response = yield Call(self._shard, {"action": "query_service",
-                                                "message": service})
-            if "error" not in response:
-                if response["local"]:
-                    provider = choice(response["local"])
-                    await self.converse({**message, service: provider}, prototype)
-                elif response["remote"]:
-                    provider = choice(response["remote"])
-                    await self.converse({**message, service: provider}, prototype)
-            else:
-                pass
-        await self.converse({}, find_service)
-        
-    async def _ssend(self, msg):
-        """
-        The actual conversation handler for the ssend method.
-        ideally we would cache these conversations, but for now we just
-        ask every time to avoid complexity. In reality, we could just
-        inject the service registry directly into the actor, but that would
-        go against the spirit of the actor model.
-        """
-        response = yield Call(self._shard, {"action": "query_service",
-                                            "message": msg["service"]})
-
-        if "error" not in response:
-            if response["local"]:
-                service = choice(response["local"])
-                await self.send(service, msg["message"])
-            elif response["remote"]:
-                service = choice(response["remote"])
-                await self.send(service, msg["message"])
-            else:
-                pass
-        else:
-            pass
-                
-    async def ssend(self, service, message):
-        """ Sends a message to a service """
-        await self.converse({"service": service, "message": message}, self._ssend)
         
     async def converse(self, message, prototype):
         """
@@ -298,6 +256,11 @@ class Actor:
         having a prototype, allowing "anonymous" conversations. As well as
         spawning a conversation even if the action was originally a primitive
         action.
+        
+        In order to start a conversation this way, supply a message and an
+        async prototype(msg) function. The prototype function must be an async
+        generator. And must yield a Call object at the start of the conversation.
+        This is when the recipient and the actual initial message are decided.
         """
         if prototype in self._conversation_prototypes:
             generator = self._conversation_prototypes[prototype](message)
@@ -403,7 +366,7 @@ class Actor:
     async def spawn(self,
                     factory: str,
                     message: dict,
-                    remote: str="mixed", # Ignored for now
+                    remote: str="mixed",
                     name: str=None,
                     add_monitor: bool = True):
 
@@ -430,20 +393,7 @@ class Actor:
                                               name=name,
                                               monitors=monitors)
         else:
-            args = {}
-            if name:
-                args["name"] = name
-            args["monitors"] = monitors
-            
-            if self._shard:
-                await self.send(self._shard, {"action": "spawn",
-                                        "type": factory,
-                                        "message": message,
-                                        **args
-                                        })
-                return name or ""
-            else:
-                return None
+            raise RuntimeError(f"No spawn function has been injected into {self.name}")
 
     async def _replace_cleanse(self):
         """
@@ -517,10 +467,7 @@ class Actor:
         is_daemon = asyncio.current_task() in self._daemon_tasks.values()
         
         if isinstance(factory, str):
-            # If the actor was spawned by a shard, it will inject a dictionary
-            # of available factories. This allows us to replace actors using
-            # actor type names. If not, the actor will halt and catch fire.
-            factory = self._factories[factory][1]
+            factory = cluster_data.local_factories[factory][1]
 
         async with self._init_lock:
             self._replacement_state = 0

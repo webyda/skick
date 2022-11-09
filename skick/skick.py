@@ -34,6 +34,7 @@ from .shard import Shard
 
 # import the stopping mechanism
 from . import terminate
+from .cluster import cluster_data
 
 
 class Skick:
@@ -43,7 +44,7 @@ class Skick:
     """
     def __init__(self, on_start=None, *args, **kwargs):
         self.on_start = on_start
-        
+        print(f"\t\t{id(cluster_data)}")
         if args:
             self.on_stop = args[0]
         else:
@@ -79,6 +80,7 @@ class Skick:
                            self.loop)
         self.shard.ws_actor = None
         self.name = self.shard.name
+        cluster_data.shard = self.name
         
         
         if "websocket_host" in kwargs: 

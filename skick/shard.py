@@ -20,11 +20,11 @@ from schema import Schema, Const, Optional, Or
 
 from .message_system_interface import MessageSystemInterface
 from .actor import Actor
-from .conversation import Respond
-from .info_bucket import InfoBucket
+from .conversation import Respond, Call
 from .addressing import get_address
 
 from . import terminate
+from .cluster import cluster_data
 
 VIKING_POEM = """Dock klagar jag ej mina dagars tal:
 Snabb var, men god, deras fart.
@@ -41,139 +41,81 @@ def shard(actor_base: Type[Actor],
     """
     Takes a concrete actor type and returns an actor
     """
-    
     msg_sys = message_factory()
     shard_actor = actor_base(shard_id if shard_id else get_address(is_shard=True),
                              msg_sys, loop=loop)
-
-    factories = {}  # This keeps track of all available factory functions
+    
+    cluster_data.shard = shard_actor.name
     actors = {}  # This keeps track of all managed actor instances
 
-    infos = InfoBucket()
-
-    local_services = {}  # This keeps track of all local services
-    remote_services = {}  # This keeps track of all remote services
-    remote_shards = {}
-    remote_factories = {} # Keeps track of which shards can spawn which actors
-            
+    cluster_data.remote_shards
     
-    def update_bucket(kill=False):
-        """ Updates the info bucket with local information """
-        timestamp = time()
-        for service in local_services:
-            for provider in local_services[service]:
-                infos.add_information({"key": {"shard": shard_actor.name,
-                                               "service": service,
-                                               "address": provider},
-                                       "timestamp": timestamp,
-                                       "info": not kill})
-        
-        infos.add_information({"key": {"shard": shard_actor.name},
-                               "timestamp": timestamp,
-                               "info": not kill})
-        
-        for factory in factories:
-            infos.add_information({"key": {"shard": shard_actor.name,
-                                           "factory": factory},
-                                   "timestamp": timestamp,
-                                   "info": not kill})
+    message_watcher = None
     
-    def decode_bucket():
-        """ Extracts information from the bucket to update local values """
-        nonlocal remote_services
-        nonlocal remote_shards
-        nonlocal remote_factories
-        def filter_remote_services(info):
-            """ True for keys representing remote services """
-            key, (_, alive) = info
-            return "service" in key and alive and not key["shard"] == shard_actor.name
+    @shard_actor.on_start
+    async def onstart():
+        nonlocal message_watcher
+        # First we need to announce the presence of the shard to the messaging system
+        await msg_sys.register_shard(shard_actor.name)
         
-        def map_remote_services(info):
-            key, _ = info
-            return (key["service"], key["address"])
+        # Second, we need to attach a watcher to the _message_task of the shard
+        # so that it can handle its own exceptions. This is necessary because
+        # the shard is the top actor in the supervision tree.
+        async def watcher():
+            try:
+                await shard_actor._message_task
+            except Exception as e:
+                print(f"Shard {shard_actor.name} died with exception {e}")
+                await shard_actor.stop()
         
-        remote_services = infos.extract(filter_func=filter_remote_services,
-                                        map_func=map_remote_services,
-                                        to_dict=True,
-                                        listify=True)
+        message_watcher = shard_actor.loop.create_task(watcher())
         
-        def filter_shards(info):
-            """ Returns true for keys representing shards other than the current one"""
-            key, (_, alive) = info
-            return ("shard" in key
-                    and len(key) == 1
-                    and not key["shard"] == shard_actor.name
-                    and alive)
+    @shard_actor.action("ping")
+    async def ping(msg):
+        print(f"We got ping't")
+        yield Respond(msg)
+        print("We initiated the response")
+        yield {"message":"pong"}
+        print("\t\t\t\tWe sent {\"message\":\"pong\"} back")
+    
+    async def fail_print():
+        print("\t\t\t\tPinger Daemon Failed")
+    @shard_actor.daemon("pinger", restart=True,on_failure=fail_print)
+    async def pinger():
+        """
+        Pings a random shard with some set interval. If the shard does not
+        reply before a set timeout, it is assumed to be dead. If it later
+        turns out to be alive, it will reintroduce itself.
+        """
+        async def conv(msg):
+            fut = msg["future"] # This is a hack
+            response = yield Call(msg["recipient"], {"action": "ping"})
+            fut.set_result(True)
             
-        def map_shard(info):
-            """ Produces a dictionary of active and inactive shards """
-            key, (_, alive) = info
-            return key["shard"]
-        
-        shards = set(infos.extract(filter_func=filter_shards,
-                                        map_func=map_shard,
-                                        to_dict=False))
-        def filter_shard_services(info):
-            """ True for active services on nonlocal shards """
-            key, (_, alive) = info
-            return ("service" in key
-                    and key["shard"] in shards
-                    and alive)
-        def map_shard_services(info):
-            """ Maps the information to a dictionary of shards and services """
-            key, _ = info
-            return (key["shard"], key["service"])
-        
-        remote_shards = infos.extract(filter_func=filter_shard_services,
-                                      map_func=map_shard_services,
-                                      to_dict=True,
-                                      listify=(shards or True))
-        
-        def filter_factories(info):
-            """ True for active factories on living shards """
-            key, _ = info
-            return ("factory" in key
-                    and not key["shard"] == shard_actor.name
-                    and key["shard"] in shards)
+        async def waiter():
+            try:
+                
+                target = choice(list(cluster_data.remote_shards))
+                fut = shard_actor.loop.create_future()
+                await shard_actor.converse({"recipient": target,
+                                            "future": fut}, conv)
+                await asyncio.wait_for(fut, timeout=5)
+                    
+            except asyncio.TimeoutError:
+                cluster_data.kill_shard(target)
+                cluster_data.decode_bucket()
+            except IndexError:
+                # This happens if some other task has removed the shard between
+                # our spawning the task and the task actually running.
+                # It is benign, so we simply ignore it.
+                pass
+                
+        while True:
+            await asyncio.sleep(5)
+            if cluster_data.remote_shards:
+                shard_actor.loop.create_task(waiter())
             
-        def map_factories(info):
-            """ Maps the information to a dictionary of factories """
-            key, _ = info
-            return key["factory"], key["shard"]
-        
-        remote_factories = infos.extract(filter_func=filter_factories,
-                                         map_func=map_factories,
-                                         to_dict=True,
-                                         listify=True)
-        
-        # Finally, attempt to detect wether there is any false information about
-        # our current shard in the bucket. If so, replace it with an up to date
-        # correction. Specifically, try to detect if there are any services
-        # marked as alive which are actually dead.
-        timestamp = time()
-        def filter_erroneous_locals(info):
-            """
-            Filter out actors on our shard which are maked as alive, but
-            which are, in fact, not present.
-            """
-            key, (_, alive) = info
-            return (key["shard"] == shard_actor.name
-                    and "service" in key
-                    and key["address"] not in local_services[key["service"]]
-                    and alive)
-        def map_corrections(info):
-            """ Constructs a set of dictionaries with corrected information """
-            key, _ = info
-            return {"key": key,
-                    "timestamp": timestamp,
-                    "info": False}
-        
-        corrections = infos.extract(filter_func=filter_erroneous_locals,
-                                    map_func=map_corrections,
-                                    to_dict=False)
-        infos.consume_batch(corrections)
-        
-    @shard_actor.daemon("whisperer")
+    @shard_actor.daemon("whisperer", restart=True)
     async def whisperer(whisper_interval=1):
         """
         Regularly whispers known information to adjacent shards
@@ -186,23 +128,22 @@ def shard(actor_base: Type[Actor],
         while True:
             await asyncio.sleep(whisper_interval)
             
-            lower = [shard for shard in remote_shards
+            lower = [shard for shard in cluster_data.remote_shards
                      if shard < shard_actor.name]
-            upper = [shard for shard in remote_shards
+            upper = [shard for shard in cluster_data.remote_shards
                      if shard > shard_actor.name]
             
-            
             recip = chain(sample(lower, k=min(len(lower),
-                                              int(log(len(remote_shards)+1)))),
+                                              int(log(len(cluster_data.remote_shards)+1)))),
                           sample(upper, k=min(len(upper),
-                                              int(log(len(remote_shards)+1)))))
-            update_bucket()
-            info_batch = infos.export()
+                                              int(log(len(cluster_data.remote_shards)+1)))))
+            cluster_data.update_bucket()
+            info_batch = cluster_data.transmission()
             for recipient in recip:
-                await shard_actor.send(recipient, {"action": "receive_info",
-                                                   "batch": info_batch,
-                                                   "purge": False,
-                                                   "broadcaster": shard_actor.name})
+                await shard_actor.send(recip, {"action": "receive_info",
+                                               "batch": info_batch,
+                                               "purge": False,
+                                               "broadcaster": shard_actor.name})
             
     @shard_actor.daemon("broadcaster")
     async def broadcaster():
@@ -217,89 +158,15 @@ def shard(actor_base: Type[Actor],
             # use some smart distribution in the future. For now, just use a
             # uniform distribution
 
-            if random() < 1/(len(remote_shards)+1):
-                update_bucket()
-                info_batch = infos.export()
+            if random() < 1/(len(cluster_data.remote_shards)+1):
+                cluster_data.update_bucket()
+                info_batch = cluster_data.transmission()
                 await msg_sys.broadcast({"action": "receive_info",
                                          "batch": info_batch,
                                          "purge": True,
                                          "broadcaster": shard_actor.name})
             else:
                 pass
-            
-
-    @shard_actor.action("register_service", schema={"action": Const("register_service"),
-                                                    "service": str,
-                                                    "address": str})
-    async def register(message):
-        """
-        Allows actors to register themselves as providing a service.
-        Schema:
-        {"action": "register_service",
-         "service": [name of service],
-         "address": [address of actor]}
-        """
-        if message["service"] in local_services:
-            local_services[message["service"]].add(message["address"])
-        else:
-            local_services[message["service"]] = {message["address"]}
-
-    @shard_actor.action("unregister_service", schema={"action": Const("unregister_service"),
-                                                      "actor": str})
-    async def unregister(message):
-        """
-        unregisters a previously registered service
-        """
-        nonlocal local_services
-
-        for service in local_services:
-            if message["actor"] in local_services[service]:
-                local_services[service].remove(message["actor"])
-                infos.add_information({"key": {"shard": shard_actor.name,
-                                               "service": service,
-                                               "address": message["actor"]},
-                                       "timestamp": time(),
-                                       "info": False})
-            else:
-                pass
-
-    
-    @shard_actor.action("request_service", schema={"action": Const("request_service"),
-                                                   "service": str,
-                                                   "sender": str})
-    async def request_service(message):
-        """
-        Requests a service from the service records of the actor
-        Schema:
-        {"action": "request_service",
-         "service": [name of service],
-         "sender": [reply address]}
-        """
-        serv = message["service"]
-        local = list(local_services[serv]) if serv in local_services else []
-        remote = list(remote_services[serv]) if serv in remote_services else []
-
-        await shard_actor.send(message['sender'], {"action": "service_delivery",
-                                                   "service": message["service"],
-                                                   "local": local,
-                                                   "remote": remote})
-        
-    query_schema = Schema({"action": Const("query_service"),
-                           "message": str,
-                           "sender": str,
-                           "cid": str}).is_valid
-    
-    @shard_actor.action("query_service")
-    async def query_service(msg):
-        yield Respond(msg)
-        if query_schema(msg):
-            serv = msg["message"]
-            local = list(local_services[serv]) if serv in local_services else []
-            remote = list(remote_services[serv]) if serv in remote_services else []
-            yield {"local": local, "remote": remote}
-        
-        else:
-            yield {"error": "invalid query"}
 
     @shard_actor.action("receive_info", schema={"action": Const("receive_info"),
                                                 "batch": [{"key": dict, "timestamp": float, "info": Or(bool, dict)}],
@@ -315,27 +182,33 @@ def shard(actor_base: Type[Actor],
         the concerned shards if they receive a notice that they possess a service
         that they know not to be present.
         """
-        infos.consume_batch(message["batch"])
-        if message["purge"]:
-            infos.purge(time() - 5)
-        decode_bucket()
+
+        if not message["broadcaster"] == shard_actor.name:
+            cluster_data.consume_batch(message["batch"], message["purge"])
+            cluster_data.decode_bucket()
+        else:
+            if message["purge"]:
+                cluster_data.purge()
+            else:
+                pass
+            
         
-                
     async def spawn(actor_type, message={}, name=None, monitors = None, run=True):
-        if actor_type in factories:
-            actor_type, actor_factory = factories[actor_type]
+        if actor_type in cluster_data.local_factories:
+            actor_type, actor_factory = cluster_data.local_factories[actor_type]
             name = name if name else get_address()
 
             actor = actor_type(name,
                                message_system=message_factory(),
                                loop=loop,
                                shard=shard_actor.name)
-            actor._factories = factories
+
             actor._injected_spawn = injectable_spawn
             actor_factory(actor, message)
 
             actors[name] = actor
             await actor._monitor({"address": shard_actor.name})
+            
             if monitors:
                 if isinstance(monitors, str):
                     await actor._monitor({"address": monitors})
@@ -349,11 +222,11 @@ def shard(actor_base: Type[Actor],
                 return name
 
         else:
-            print(f"Actor type {actor_type} not found in {factories}")
+            print(f"Actor type {actor_type} not found in {cluster_data.local_factories}")
             return None
-    
+
     shard_actor.spawn = spawn
-    
+
     async def injectable_spawn(actor_type, message={}, name=None, monitors=None, remote="mixed", run=True):
         """
         To be injected into actors to allow them to spawn on the shard without
@@ -366,10 +239,10 @@ def shard(actor_base: Type[Actor],
         if remote == "local":
             return await spawn(actor_type, message, name, monitors, run)
         elif remote == "mixed":
-            if actor_type in factories:
+            if actor_type in cluster_data.local_factories:
                 return await spawn(actor_type, message, name, monitors, run)
-            elif actor_type in remote_factories:
-                shard = choice(remote_factories[actor_type])
+            elif actor_type in cluster_data.remote_factories:
+                shard = choice(cluster_data.remote_factories[actor_type])
                 name = get_address(shard=shard)
                 await shard_actor.send(shard, {"action": "spawn",
                                                "type": actor_type,
@@ -379,9 +252,9 @@ def shard(actor_base: Type[Actor],
                                                "remote": "local",})
                 return name
             else:
-                print(f"No remote factory named {actor_type} in dictionary {remote_factories}")
+                print(f"No remote factory named {actor_type} in dictionary {cluster_data.remote_factories}")
         elif remote == "remote":
-                shard = choice(remote_factories[actor_type])
+                shard = choice(cluster_data.remote_factories[actor_type])
                 name = get_address(shard=shard)
                 await shard_actor.send(shard, {"action": "spawn",
                                                "type": actor_type,
@@ -403,6 +276,7 @@ def shard(actor_base: Type[Actor],
                                          Optional("add_monitor"): Or([str], str),
                                          Optional("remote"): str,
                                          })
+    
     async def spawn_from_message(message):
         """
         Instantiates an actor of the relevant type as found in the factories
@@ -415,23 +289,23 @@ def shard(actor_base: Type[Actor],
         
         match remote:
             case "mixed":
-                if act_type in factories:
+                if act_type in cluster_data.local_factories:
                     await spawn(act_type, message=msg, name=name, monitors=message["add_monitor"])
-                elif act_type in remote_factories:
-                    await shard_actor.send(choice(remote_factories[act_type]),
+                elif act_type in cluster_data.remote_factories:
+                    await shard_actor.send(choice(cluster_data.remote_factories[act_type]),
                                            {**message, "remote": "local"})
                     
                 else:
                     print(f"Incorrect actor type {act_type} requested")
                     
             case "local":
-                if act_type in factories:
+                if act_type in cluster_data.local_factories:
                     await spawn(act_type, message=msg, name=name, monitors=message["add_monitor"])
                 else:
                     print(f"Incorrect actor type {act_type}")
             case "remote":
-                if act_type in remote_factories:
-                    await shard_actor.send(choice(remote_factories[act_type]),
+                if act_type in cluster_data.remote_factories:
+                    await shard_actor.send(choice(cluster_data.remote_factories[act_type]),
                                            {**message, "remote": "local"})
                 else:
                     print(f"Incorrect actor type {act_type}")
@@ -439,7 +313,7 @@ def shard(actor_base: Type[Actor],
     def factory(name, actor_type=actor_base):
         """ Attaches a factory to the shard """
         def decorator(func):
-            factories[name] = (actor_type, func)
+            cluster_data.local_factories[name] = (actor_type, func)
             return func
         return decorator
 
@@ -458,30 +332,10 @@ def shard(actor_base: Type[Actor],
         if addr:
             if addr in actors:
                 del actors[addr]
-            
-            
-            await unregister({"actor": addr})
+
+            await cluster_data.delete_service(addr)
         else:
             pass
-        
-    message_watcher = None
-    @shard_actor.on_start
-    async def onstart():
-        nonlocal message_watcher
-        # First we need to announce the presence of the shard to the messaging system
-        await msg_sys.register_shard(shard_actor.name)
-        
-        # Second, we need to attach a watcher to the _message_task of the shard
-        # so that it can handle its own exceptions. This is necessary because
-        # the shard is the top actor in the supervision tree.
-        async def watcher():
-            try:
-                await shard_actor._message_task
-            except Exception as e:
-                print(f"Shard {shard_actor.name} died with exception {e}")
-                await shard_actor.stop()
-        
-        message_watcher = shard_actor.loop.create_task(watcher())
         
     @shard_actor.on_stop
     async def onstop():
@@ -493,7 +347,7 @@ def shard(actor_base: Type[Actor],
                 #If a kind soul has injected a websocket actor. Kill it.
                 await shard_actor.ws_actor.stop()
 
-            update_bucket(kill=True)
+            cluster_data.update_bucket(kill=True)
             
             for actor in actors.values():
                 await actor.stop()
@@ -501,7 +355,7 @@ def shard(actor_base: Type[Actor],
             await msg_sys.unregister_shard(shard_actor.name)
             
             # Say a final goodbye to all the old shard pals
-            info_batch = infos.export()
+            info_batch = cluster_data.transmission()
             
             await msg_sys.broadcast({"action": "receive_info",
                                      "batch": info_batch,

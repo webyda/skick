@@ -8,6 +8,7 @@ because without it, starting new actors is too time consuming.
 import asyncio
 import orjson
 from time import perf_counter
+from traceback import print_exc
 
 
 import aio_pika
@@ -128,7 +129,9 @@ class RoutedFactory(MessageSystemFactory):
         if self.out_exchange:
             msg = orjson.dumps(message)
             msg_object = aio_pika.Message(body=msg)
-            return await self.out_exchange.publish(msg_object, routing_key=shard)
+            return await self.out_exchange.publish(msg_object,
+                                                   routing_key=shard,
+                                                   mandatory=False)
         else:
             return False
     
