@@ -5,27 +5,34 @@ this arises because we can not simply gather all tasks on start up, since new
 tasks are continuously being added from within other tasks.
 
 The mechanism works as follows: When the loop is started, a Future is created.
-the loop runs until the future is done.
-
-The application stops by starting all of its cleanup procedures from within
-some task, and then gathers all "stopping" tasks. When all tasks are done, the
-future is set to done and the loop stops. This way, the task that initiates
-the shutdown cascade does not have to be the last task to finish and we do not
-risk cutting off some important data retention step or someting similar.
+The loop runs until the future is done. The application stops by starting all
+of its cleanup procedures from within some task, and then gathers all
+"stopping" tasks. When all tasks are done, the future is set to done and the
+loop stops. This way, the task that initiates the shutdown cascade does not
+have to be the last task to finish and we do not risk cutting off some
+important data retention step or someting similar.
 """
 import asyncio
 
-switch = [] # Abusing mutability. Please don't tell anyone.
+switch = []  # Abusing mutability. Please don't tell anyone.
+
 
 def set_loop(loop):
+    """
+    We need to know the identity of the event loop to be able to instantiate
+    the "switch" future. Therefore, we refrain from doing so until the skick
+    instance creates the loop.
+    """
     switch.append(loop.create_future())
     return switch[0]
+
 
 # We need to keep track of which "stopper" tasks are running. These tasks
 # oversee the cleanup of some part of the system, such as an actor. It is
 # important that terminate() knows which these tasks are so that it can gather
 # only these particularly important tasks.
 stopper_tasks = set()
+
 
 def add_stopper(awt, loop):
     """
@@ -39,18 +46,25 @@ def add_stopper(awt, loop):
     tasks. This is the price we pay for a clean shutdown with the present
     architecture.
     """
+
     async def awt_wrapper():
         stopper = loop.create_task(awt)
         stopper_tasks.add(stopper)
         try:
             await stopper
-        except: # This is the end of the world, so we can afford to be sloppy
+        except:  # This is the end of the world, so we can afford to be sloppy
             pass
         stopper_tasks.remove(stopper)
+
     stopper = loop.create_task(awt_wrapper())
     return stopper
 
+
 async def terminate():
-    await asyncio.gather(*(stopper_tasks-{asyncio.current_task()}))
+    """
+    Collates all tasks that have been marked as "stopping" tasks and awaits
+    them (excluding the current task). When all tasks are done, flip the switch
+    in the singleton module, signalling that the loop can be stopped safely.
+    """
+    await asyncio.gather(*(stopper_tasks - {asyncio.current_task()}))
     switch[0].set_result(True)
-    

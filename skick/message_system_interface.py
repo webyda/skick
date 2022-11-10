@@ -8,7 +8,7 @@ from typing import Any
 
 
 class MessageSystemInterface(ABC):
-    """ Interface for message systems """
+    """An interface for message systems"""
 
     @abstractmethod
     async def mailman(self, actor: "Actor") -> asyncio.Task:
@@ -24,17 +24,24 @@ class MessageSystemInterface(ABC):
         This method must provide a means to send a message to the actor at the
         address specified.
         """
-
+    @abstractmethod
+    async def unregister_shard(self, address: str) -> None:
+        """
+        This method must provide a means to unregister a shard from the
+        messaging system.
+        """
+        
     @abstractmethod
     async def register_shard(self, address):
         """
         This method registers the current shard with the messaging system
         so that it can receive broadcasts meant for all shards.
         """
-        
+
     @abstractmethod
     async def broadcast(self, message: dict) -> None:
-        """ This method broadcasts a message to all shards """
+        """This method broadcasts a message to all shards"""
+
 
 class MessageSystemFactory(ABC):
     """
@@ -44,9 +51,10 @@ class MessageSystemFactory(ABC):
     which are given separate channels. This allows us to abstract away the
     boilerplate code for setting up individual actors' messaging systems.
     """
+
     @abstractmethod
     def __init__(self, config: Any, loop=None) -> None:
-        """ We require an __init__ method with a specific interface """
+        """We require an __init__ method with a specific interface"""
 
     @abstractmethod
     def create(self) -> MessageSystemInterface:

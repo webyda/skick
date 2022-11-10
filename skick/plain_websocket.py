@@ -1,5 +1,5 @@
 """
-Provides an implementation of the websocket interface in the Websockets
+Provides an implementation of the websocket interface built on the Websockets
 library. This, in a sense, is the reference implementation of the interface,
 around which it was designed, Websockets being the most commonly used websocket
 library for Python. In this sense it is a "plain vanilla" implementation.
@@ -15,17 +15,15 @@ PlainConnectionObject = WebsocketConnectionObject
 
 
 class PlainWebsocket:
+    """ A thin encapsulation of functionality in the Websockets library. """
     def __init__(self, *args, **kwargs):
         self.args = args
         self.kwargs = kwargs
         self.server_object = None
-        
+
     async def serve(self, handler):
         """
         Mimics the websockets.serve function.
         """
         self.server_object = await server.serve(handler, *self.args, **self.kwargs)
         return self.server_object
-    
-        
-    

@@ -15,11 +15,12 @@ from secrets import token_hex
 
 SHARD = None
 
+
 def get_address(shard=None, is_shard=False):
     """
     Returns a string of the form shard:actor. If is_shard is True,
     it returns shard:shard and sets the shard variable.
-    
+
     If no shard is provided, it will use a global "SHARD" variable which is
     set on a per shard basis when get_address is called with the is_shard flag
     set.
@@ -35,4 +36,3 @@ def get_address(shard=None, is_shard=False):
             return f"{SHARD}:{token_hex()}"
         else:
             raise ValueError("Shard not set")
-     
