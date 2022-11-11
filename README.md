@@ -55,15 +55,12 @@ This demonstrates some of the fundamental ideas behind Skick. Actors should
 be defined in much the same way as endpoints in the most popular HTTP
 frameworks like Flask and Sanic. There should be minimal boilerplate
 requirements, and the library should interface seamlessly with a JavaScript
-client in a browser. However, in order to see the full picture, we will need to
+client in a browser. In order to see the full picture, we will need to
 take a deeper dive into the features and general architecture of the system.
 ## The Current State of the Project
-Skick, as of today, is not production ready. There are a number of semi-dysfunctional components, known inadequacies that pose security risks, and
-a lack of certain necessary features both large and small (such as the ability
-to tell the already TLS capable Websockets library to actually use TLS).
-
-The state of the product could therefore perhaps most accurately be described as
-a proof of concept or pre-alpha.
+Skick is in an experimental state. It is essentially a proof of concept. It has
+not been battle tested on the internet, and has not been extensively analyzed
+for vulnerabilities. There are certain weak points.
 
 ## The Actor
 At the heart of the Skick system lies the lone actor. Actors are program units
@@ -88,7 +85,7 @@ been added to Skick. In particular, Skick actors also have abilities like:
 
 ### Defining Actors
 Actors in Skick are defined in *synchronous* declarative functions which are
-registered with a special *shard* actor (conveniently hidden away in the Skick
+registered by a special *shard* actor (conveniently hidden away in the Skick
 object). The actor is instantiated by this shard actor when it is needed. The
 creation process proceeds in the following steps:
 
@@ -114,7 +111,7 @@ the shard has prepared for us, and the `init_message` is some *message*
 (messages in skick are always dictionaries) that helps us set up the initial
 state of the actor.
 
-Within the function, the actor_instance contains methods which decorate
+Within the function, the `actor_instance` contains methods which decorate
 asynchronous functions in various ways. These are
 
 1. `@inst.action(action_name, [optional schema])` which defines a response to
@@ -122,11 +119,11 @@ asynchronous functions in various ways. These are
 2. `@inst.on_start` which registers an asynchronous method to run on startup.
    N.B: It is very important to run time consuming initiation steps such as
    fetching information from an API asynchronously in this `on_start` function.
-   If you do not do this, then you will hold up the shard actor, essentially
+   If you do not do this, then you will hold up the shard actor,
    freezing the entire shard.
 3. `@inst.on_stop` which acts as the inverse of `on_start`, being run during
    the ordinary shutdown procedure.
-4. `@inst.daemon(name)` which registers asynchronous function that will run in
+4. `@inst.daemon(name)` which registers an asynchronous function that will run in
    a separate task under the name `name`.
 5. `@inst.conversation(name)` which will be discussed later, but which formerly
    decorated asynchronous generator functions to produce the stateful
@@ -138,7 +135,7 @@ To illustrate how these parts function together, an example is in order.
 @skick.actor("accumulator")
 def accumulator(inst, message):
     """ An actor that adds numbers to an internal tally. """
-    tally = message["initial_tally"] if "initial_tally" in message else 0
+    tally = message.get("initial_tally", 0)
 
     @inst.daemon("tally_reporter")
     async def report():
@@ -169,8 +166,8 @@ There are a number of helpful methods in the actor instance.
    to the actor that has the address *address*. In general, this address must be
    known in advance.
 2. `async inst.replace(new_type, message)` which replaces the current actor's
-   behaviors with a new set of behaviors defined in some actor definition function.
-   This function essentially strips the actor of all but its address, purging
+   behaviors with a new set of behaviors defined in some actor definition.
+   This function strips the actor of all but its address, purging
    all daemons, all message handlers, conversations, all its closures etc.
 3. `async inst.converse(partner, initial_message, prorotype)` which initiates a
    conversation with the `partner` actor. More on this later.
@@ -179,7 +176,15 @@ There are a number of helpful methods in the actor instance.
    `message`. By default, this is spawned on the same shard in clusters, and
    the requesting actor is added as a monitor so that it will be notified when
    the new actor dies. 
-
+5. `register_service(name)` which registers the actor in the service registry
+   as probiding the service `name`
+6. `unregister_service()` which removes all mentions of the actor from the service
+   registry
+7. `get_service(name, local="mixed")`, which retrieves a random service provider
+   for the service, either from
+   1. `local="local"` only shard local providers;
+   2. `local="mixed"` local or remote shards, preferring local shards if available; or
+   3. `local="remote"` only remote providers.
 
 ### How to Run Actors
 Actors that have been defined in the manner described above are not
@@ -196,7 +201,7 @@ spawn actors and kick start the system.
 from skick import Skick
 
 async def on_start(shard):
-    await shard.spawn("accumulator", {"initial_tally": 420}, name="accumulator")
+    await shard.spawn("accumulator", {"initial_tally": 420})
 
 skick = Skick(on_start=on_start)
 
@@ -220,8 +225,8 @@ messages to each other in a call and response fashion.
 In a conversation in Skick, the actions involved are not normal asynchronous
 functions, but asynchronous generator functions. Messages are sent and received 
 through the use of the `yield` keyword. Conversations are set up by yielding
-special `Conversation` objects subclassed in one `Call` and one `Respond` variety
-for convenience, and are managed by the actor objects involved out of the view
+special `Conversation` objects, subclassed in one `Call` and one `Respond` variety
+for convenience, and are managed by the actor objects out of the view
 of the programmer. Suppose the Accumulator actor from before were to return the
 new tally whenever it received an "add" request. We could rewrite the action as
 a conversation in the following manner.
@@ -230,7 +235,7 @@ a conversation in the following manner.
 @skick.actor("accumulator")
 def accumulator(inst, message):
     """ An actor that adds numbers to an internal tally. """
-    tally = message["initial_tally"] if "initial_tally" in message else 0
+    tally = message.get("initial_tally", 0)
 
     ...
 
@@ -243,8 +248,9 @@ def accumulator(inst, message):
         call.
         """
         nonlocal tally # Necessary nonlocal declaration for immutable objects
-        tally += msg["number"]
         yield Respond(msg) # We first "pick up the phone" as it were
+        
+        tally += msg["number"]
         yield {"tally": tally} # Then we yield a response
 ```
 In the corresponding caller, another asynchronous generator is found:
@@ -269,7 +275,7 @@ call) taking the form:
     ...
 ```
 
-Above, in the caller actor, the conversation was initiated because we received
+In the caller actor above, the conversation was initiated because we received
 a message the handler of which was a *conversation prototype*. This is not always
 appropriate. For example, we may wish to start conversations in the `on_start` method
 or in some daemon. If we wish to do this, we can create a conversation using the
@@ -320,34 +326,20 @@ helpful jobs for the actors.
    on the other actors, as well as telling the other actors which services it provides.
 4. It helps spawn actors
 
-The spawning functionality has a helper function in the Actor class,
-but in theory, we can send a message manually to the shard actor requesting
-that it spawns a new actor for us.
-
-The service registry is more interesting for the average Skick user. At present,
-it operates without using the conversation mechanism. There are a few relevant
-actions.
-
-1. `"register_service"`, which allows you to register an actor as a service provider
-   using a message which conforms to the schema
-   `{"action": "register_service", "service": name_of_service, "address": actor_in_question}`
-2. `"unregister_service"`, which unregisters a previously registered actor. It
-   uses the schema `{"action": "unregister_service", "actor": actor_in_question}`.
-3. `"request_service"` which allows you to inquire which actors provide a certain
-   service. It uses the schema `{"action": "request_service", "service": name_of_service, "sender": where_to_respond}`.
-4. `"service_delivery"` which is used by the requesting actor to receive the service information.
-   the shard will send information on the format
-   `{"action": "service_delivery", "service": name_of_service, "local": [local_actors], "remote": [remote_actors]}`
+Most of these functions are not exposed to the user through the actual shard actor object.
+Instead, the shard injects helpers into all actors so that they can be accessed through the
+shard instance. Actors can also be spawned by sending a message to the shard, but this is
+primarily meant for spawning shards remotely.
 
 ### The Websocket Actor
 If a websocket server has been requested, a special Websocket Actor will be instantiated. It maintains its own
 collection of websocket handlers called *sessions* and *subsessions* as well as so called *handshake sequences*.
-these are abstractions of lower level actor functionality, to which websocket connections have been affixed.
+These are abstractions of lower level actor functionality, to which websocket connections have been affixed.
 the exact details are complicated enough to warrant their own chapter, but these special actors live in their own
 universe, which is managed by the websocket actor.
 
 ## The Session and the Subsession
-In the earlier sections, we have discussed features which live, so to speak
+In the previous sections, we discussed features that live, so to speak,
 inside the clean room that your back end should be. However, for our back end to
 be useful for anything, it has to be able to communicate with the outside world.
 Most importantly, it has to be able to communicate with clients over the internet.
@@ -355,9 +347,9 @@ Skick's main method for this is to use *websockets*. Websockets allow bidirectio
 communication over persistent TCP connections with clients like web browsers
 and phone apps.
 
-The way Skick handles these connections is to create a pair of actors for each connection.
+The way Skick handles these connections is to create a pair of actors for each incoming connection.
 This syzygy of actors is called a *subsession*. If the client is able to directly request
-the subsession type, then it is called a *session*. All the other subsession types
+the subsession type over the websocket, then it is called a *session*. All the other subsession types
 are created through subsession replacement.
 
 Let us recall the Hello World program from earlier:
@@ -402,11 +394,11 @@ They *target* the `BackActor` since it is the actual main actor of the session.
 As for the `@inst.socket` decorator, it reverts to an `@inst.action` decorator
 ignoring the schema entirely.
 
-Many other methods have these dual interpretations. The `@inst.socksend` method,
+Manyer methods have these dual interpretations. The `@inst.socksend` method,
 which only exists on these special websocket actors, sends a message to the
 websocket client when it is called on the `FrontActor`, but if it is called in
 the `BackActor`, it encapsulates the message in an action that asks the `FrontActor` to
-send the encapsulated message over a websocket.
+send the encapsulated message over the websocket.
 
 ### How Websocket Connections are Processed
 When a client requests a new websocket connection, the following steps are followed
@@ -420,14 +412,14 @@ When a client requests a new websocket connection, the following steps are follo
 3. The same `session` definition function is run twice. Once on the FrontActor
    and once on the BackActor function.
 4. The websocket actor coordinates these two actors by directly injecting references
-   to things, like the websocket connection and the other actor in the pair, into
+   to things like the websocket connection and the other actor in the pair, into
    the actor objects.
 5. The actors are both started in their own separate tasks.
 
 Once this process has completed, the client can send messages to the server.
 If it does, they will be processed in the following order:
 
-1. The request arrives over websocket connection.
+1. The request arrives over the websocket connection.
 2. It is received by a separate task in the `FrontActor`, where it is deserialized
    and compared with locally available schemas.
 3. If there is a corresponding schema, and the deserialized message conforms to it,
@@ -440,7 +432,7 @@ takes place:
 
 1. The message is encapsulated into a message which is sent to the `FrontActor`
 2. The encapsulated message is received in the `FrontActor` and is processed as
-   any other action. The specific action, `"socksend"`, merely sends the message
+   any other action. The specific action, `"socksend"`, merely extracts the message and sends it
    through a method in the `FrontActor`'s self._websocket field.
 
 ### Why
@@ -481,6 +473,7 @@ or have had their functionalities altered
 5. The `async inst.replace` method works as usual, but performs additional steps to accommodate for the websocket.
    It is not invoked directly by the user, but is invoked in response to a message sent by the `BackActor`
 6. The conversation mechanisms function as usual, but are largely irrelevant.
+7. The service registry functions are not disabled, but only `get_service` should be used in practice.
 
 ### Specifics About the BackActor's Methods
 Like in the case of the `FrontActor`, the `BackActor` inherits all decorators and
@@ -488,15 +481,16 @@ methods from the `Actor` class. Some of them function as normally, and some have
 had their behaviors altered. In addition to this, all the methods defined on the 
 `FrontActor` also exist on the `BackActor` but many of them do nothing. 
 
-1. The `@inst.front_...` decorators all do nothing on the `BackActor`
+1. The `@inst.front_...` decorators all do nothing on the `BackActor`.
 2. The `@inst.daemon` and `@inst.action` decorators functions as they do on the
    `Actor` class.
-3. The `async inst.socksend` method sends a message to the `FrontActor`
+3. The `async inst.socksend` method sends a message to the `FrontActor` instructing it to send a message to the client.
 4. The `async inst.replace` method replaces the `BackActor`, but also performs the additional step
    of ordering the `FrontActor` to perform a corresponding replacement action on its end.
    N.B: This operates over the messaging system, and may therefore be somewhat brittle in some situations.
 5. The conversation mechanisms function as usual, with the exception of the addition of a
    special method to query the client for input. More on this later.
+6. The service registry functions are not disabled but only `get_service` should be used in practice.
 
 ### Session Conversations
 When conversing with a handler defined through an `@inst.socket` decorator,
@@ -513,19 +507,18 @@ set up a query in the `FrontActor`. They work by siphoning off client requests w
 
 The conversation in the `BackActor` will resume once the websocket client has sent its response.
 
-
 Because the `FrontActor` is unable to read function bodies, the subschemas
 can not be specified within the handler requesting the conversation.
 Instead, subschemas must created in the session declaration's direct scope
 using the decorator `@inst.query_schema`. This is highly inconvenient, so
 a number of simple schemas have been predefined for the programmers's convenience, namely:
 
-* `"default"` which accepts an `int`, `float`, `str` or `bool`
-* `"int"` which accepts an `int`,
-* `"float"` which accepts a `float`,
-* `"str"` which accepts a `str`,
-* `"bool"` which accepts a `bool`,
-* `"list"` which accepts a list consisting of only those types included in the `"default"` subschema.
+1. `"default"` which accepts an `int`, `float`, `str` or `bool`
+2. `"int"` which accepts an `int`,
+3. `"float"` which accepts a `float`,
+4. `"str"` which accepts a `str`,
+5. `"bool"` which accepts a `bool`,
+6. `"list"` which accepts a list consisting of only those types included in the `"default"` subschema.
 
 For this reason, many simple queries require no extra `query_schema` declarations.
 
@@ -567,7 +560,7 @@ is sent.
 
 ### Handshake Sequences
 Imagine for a moment that your Skick application has several classes of user sessions. Maybe they represent different user tiers or perhaps one skick instance
-runs several different services. In many such situations there are substantial benefits to be gained from allowing us to reuse those sequences of sessions and subsessions that the system proceeds through before a fully authenticated and initiated user session is in place. Skick has a mechanism for this called a
+runs several different services. In many such situations there are substantial benefits to be gained from allowing us to reuse sequences of sessions and subsessions that the system proceeds through before a fully authenticated and initiated user session is in place. Skick has a mechanism for this called a
 *handshake sequence*.
 
 We may declare that a function is a `handshake` by using the `@skick.handshake`
@@ -628,7 +621,7 @@ for a RabbitMQ based system by adding a parameter when instantiating your Skick 
 ...
 
 skick = Skick(on_start = on_start,
-              messaging_system = "amqp://user:pwd@rabbit_url:rabbitport")
+              message_system = "amqp://user:pwd@rabbit_url:rabbitport")
 
 ...
 
@@ -636,6 +629,40 @@ skick = Skick(on_start = on_start,
 If you choose to run skick in a clustered configuration, there is no requirement that the shards be homogeneous. You may opt to have some that do not support websockets, some that use different websocket drivers, some that provide interactions with some external service local to its docker container or whichever
 architecture you think is best for your application. No matter how you organize
 the system, it will work as long as the shards all use the same messaging system.
+
+## The Skick Object
+In the examples above, we interact with the library through an imported class
+called Skick. The skick class is responsible for setting up the special actors,
+launching all needed tasks and connections, as well as coordinating all the disparate components for the user.
+
+### Options
+The Skick object natively supports the following options:
+
+1. `on_start` which allows you to specify a startup function. This would typically be used to spawn actors on startup.
+2. `message_system` which, if you supply it, presumes that you have given it an AMQP url to a RabbitMQ instance.
+3. `websocket_host` which, if you supply it, is the address the websocket library will listen on
+4. `websocket_port` which, if you supply it, is the port the websocket library will listen on
+5. `websocket_server` which, if you set it to any value, will disable the websocket server
+6. `ssl` which tells the websocket library to use TLS. It can be
+   1. A string, in which case skick will assume it is a PEM file and will use it to generate an SSLContext object for you using python's `create_default_context` method.
+   2. A tuple, in which case it will act as above, but it will presume the first element is the PEM file and the second is the password.
+   3. An SSLContext instance, in which case it will be used by the websocket server.
+7. `websocket_options` which should be a dictionary of options that will be passed directly to the websocket library.
+8. `dict_type` which, if you provide a string, will be presumed to be a redis url to a redis server that will manage your `hash` objects.
+
+### Methods
+The `Skick` instance also supplies a number of methods. Some of these are
+actual methods from the class defintion and some are merely proxies for methods
+in the underlying `Shard` object.
+
+1. `skick.start()`, which starts the event loop and the rest of the system.
+2. `skick.stop()`, which initiates the shutdown procedure.
+3. `skick.add_directory(directory)` which adds the actors, subsessions and handshakes in the directory to the skick instance.
+4. `@skick.actor(name)` which directly registers an actor type with the shard.
+5. `@skick.subsession(name)` which directly registers a subsession type with the websocket actor.
+6. `@skick.session(name)` which directly registers a session type with the websocket actor.
+7. `@skick.handshake(name)` which directly registers a handshake with the websocket actor.
+8. `skick.hash(name)` which provides a hash table as described below using the requested backend.
 
 ## Miscellaneous Features
 ### Hashes
@@ -677,7 +704,7 @@ in the table. The supported operations are:
 
 These as objects are, as is evident from this description, rather basic. Among
 other things, they do not support iteration, can not be copied and can not be
-compared with one another. What they do support is both a single core,
+compared with one another. What they do support is both a single core
 dictionary based implementation and a clustered Redis based implementation.
 
 In order to use the Redis version, ensure you have a Redis instance running,
@@ -697,7 +724,9 @@ the underlying philosophy of Skick. We do not want the Java experience. We want
 minimal boilerplate requirements and we want simple use cases to be available
 at the developer's fingertips. If there were no facilities such as the hash
 object in Skick, then the developer would have to make his own version of it for
-nearly every project. While this would not be altogether difficult, and while it would allow him to expand its capabilities to encompass more of Redis' (if he choses Redis) feature set, it would be a major annoyance.
+nearly every project. While this would not be altogether difficult, and while it
+would allow him to expand its capabilities to encompass more of Redis' (if he
+choses Redis) feature set, it would be a major annoyance.
 
 For those applications that require more sophisticated interactions with Redis,
 other in memory databases or fully featured SQL databases, the
