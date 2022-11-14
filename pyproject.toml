@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "skick"
-description = 'Skick is a library for building actor based web application backends that communicate with javascript clients over websockets. It is in a very early state of development.'
+description = 'Skick is a library for building actor based web application backends that communicate with javascript clients over websockets. It is in an early state of development.'
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -21,7 +21,6 @@ classifiers = [
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: Implementation :: CPython",
-  "Programming Language :: Python :: Implementation :: PyPy",
   "Intended Audience :: Developers",
   "Intended Audience :: Information Technology",
   "License :: OSI Approved :: MIT License",
@@ -31,12 +30,12 @@ classifiers = [
   "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
 dependencies = [
-  "aio-pika>=8",
-  "schema",
-  "websockets",
-  "redis",
-  "orjson",
-  
+  "aio-pika >=8",
+  "schema >=0.7",
+  "websockets >=10",
+  "redis >=4",
+  "orjson >=3",
+  "uvloop >=0.16",
   ]
 version = "0.0.1a0.dev0"
 [project.urls]
