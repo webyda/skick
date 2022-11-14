@@ -664,6 +664,54 @@ in the underlying `Shard` object.
 7. `@skick.handshake(name)` which directly registers a handshake with the websocket actor.
 8. `skick.hash(name)` which provides a hash table as described below using the requested backend.
 
+## Sentinels
+In an actor model, we frequently end up having a large number, perhaps tens of thousands of concurrent actors. In the absence of some tool to keep track of these,
+it is very easy to see how actors could be lost and forgotten, leading to memory leaks, or how errors from crashing actors might go unknown, or how any number of other things might go wrong.
+
+Most actor systems use some sort of system for supervising actors for this reason. In Skick, the supervision is carried out by *sentinels*, tasks that monitor other tasks. If they detect a cancellation, exception or a task being marked as done, they will report this to the actor's *monitors*. Monitors are other actors that have told the supervised actor that they wish to be notified.
+
+### Registering as a Monitor
+When an actor is spawned, we may supply the `inst.spawn` function with a list of addresses under the optional `monitors` keyword argument.
+if we do, then the shard will automatically assign the listed actors as monitors and have the sentinel task report to them. We may also
+request to monitor a running actor by sending it a request over the message system. The message must follow the format
+```python
+{"action": "monitor", "address": address_to_report_to}
+```
+and will receive updates just the same as if it had been added when the actor was spawned.
+
+### Receiving Notifications
+When an actor ceases to operate (that it stops processing messages), the sentinel task will produce a message depending on
+how this came to be. The message will follow the schema
+```python
+{
+   "action": "sentinel",
+   "address": str, # The address of the actor that stopped
+   "type": Or(Const("done"), Const("cancellation"), Const("exception")), # The reason for the update
+   Optional("exception"): str, # The name of the exception if one occurred
+   "tag": str, # A callsign of the sentinel that was triggered. Usually "main_task".
+}
+```
+
+The user can catch these in a few different ways, but the easiest is to register sentinel handlers.
+The actor instance provides two functions for this:
+
+1. `inst.sentinel_handler(name, awt)` which is receives the sentinel message when the address field matches the `name` argument.
+2. `@inst.default_sentinel` which receives sentinel messages for which no specific sentinel handler has been registerd.
+
+Alternatively, you can override the default behavior by defining an `@inst.action` for the `"sentinel"` messages.
+
+### Out of the Box Sentinels
+The shard actor will always keep a lookout for any actor it has spawned so that it can remove the instance from its internal registries and have it be garbage collected.
+The websocket actor will always supervise all front- and back- actors to ensure they get get removed in a similar fashion. Additionally, both actors in a syzygy will notify eachother of their demise.
+
+### What Triggers the Sentinel
+There are a few ways to trigger the sentinel. Under the hood, it awaits the message processing task. This means:
+1. Any action that cancels the actor, such as invoking the `inst.stop` method, will produce a `"cancellation"` message.
+2. Any exception arising inside a message handler will cause an `"exception"` message.
+3. Any daemon marked as a `dead_mans_hand` daemon, will cancel the message processing task, leading to a `"cancellation"` message
+   *even if it was stopped by an exception*.
+4. If the websocket consumer task in a `FrontActor` dies, it will send a sentinel message to the `BackActor`, in which the `tag` field differs from normal sentinel actions.
+
 ## Miscellaneous Features
 ### Hashes
 In many applications we need some method of keeping track of information like
