@@ -18,6 +18,7 @@ class ClusterDataManager:
     availability of particular resources like a service. The bucket is then
     used to construct dictionaries of information for easy and convenient lookup.
     """
+
     def __init__(self, shard=None):
         self.infos = InfoBucket()
 
@@ -33,7 +34,7 @@ class ClusterDataManager:
         self.infos.purge(monotonic() - ttl)
 
     def consume_batch(self, batch, purge=False, ttl=20):
-        """ Takes a list of information dicts and adds them to the bucket. """
+        """Takes a list of information dicts and adds them to the bucket."""
         self.infos.consume_batch(batch)
         if purge:
             self.purge(ttl=ttl)
@@ -276,4 +277,4 @@ class ClusterDataManager:
         self.infos.consume_batch(corrections)
 
 
-cluster_data = ClusterDataManager() # We usually import this directly
+cluster_data = ClusterDataManager()  # We usually import this directly

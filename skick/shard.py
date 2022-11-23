@@ -32,7 +32,7 @@ def shard(
 ) -> Actor:
     """
     Builds a special actor called a "shard" actor. The shard actor manages the
-    local process and synchronizes it with the other shards in the cluster. 
+    local process and synchronizes it with the other shards in the cluster.
     """
     msg_sys = message_factory()
     shard_actor = actor_base(
@@ -65,7 +65,7 @@ def shard(
 
     @shard_actor.action("ping")
     async def ping(msg):
-        """ Responds to other shards' pings so that they know it is still alive """
+        """Responds to other shards' pings so that they know it is still alive"""
         yield Respond(msg)
         yield {"message": "pong"}
 

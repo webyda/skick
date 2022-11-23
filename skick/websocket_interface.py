@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Callable, Awaitable
 
+
 class WebsocketConnectionObject(ABC):
     """
     An abstract class for handling an individual connection between a
@@ -72,7 +73,7 @@ class WebsocketServerInterface(ABC):
         library shows up on the block.
         """
         pass
-    
+
     @classmethod
     @abstractmethod
     def get_exception_class(cls):

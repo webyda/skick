@@ -25,7 +25,7 @@ class RoutedMessage(MessageSystemInterface):
         self.simple_interface = simple_interface
 
     async def mailman(self, actor):
-        """ Sets up a queue for the local interface. """
+        """Sets up a queue for the local interface."""
         return await self.simple_interface.mailman(actor)
 
     async def send(self, address, message):
@@ -66,7 +66,7 @@ class RoutedMessage(MessageSystemInterface):
         await self.factory.queue.consume(self.factory.transfer, consumer_tag=shard)
 
     async def unregister_shard(self, address):
-        """ Deletes the queue """
+        """Deletes the queue"""
         await self.factory.queue.delete(if_unused=False, if_empty=False)
 
     async def broadcast(self, message):

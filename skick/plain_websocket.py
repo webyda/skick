@@ -14,8 +14,10 @@ WebsocketConnectionObject.register(server.WebSocketServerProtocol)
 PlainConnectionObject = WebsocketConnectionObject
 WebsocketException = WebSocketException
 
+
 class PlainWebsocket(WebsocketServerInterface):
-    """ A thin encapsulation of functionality in the Websockets library. """
+    """A thin encapsulation of functionality in the Websockets library."""
+
     def __init__(self, *args, **kwargs):
         self.args = args
         self.kwargs = kwargs
@@ -27,7 +29,7 @@ class PlainWebsocket(WebsocketServerInterface):
         """
         self.server_object = await server.serve(handler, *self.args, **self.kwargs)
         return self.server_object
-    
+
     @classmethod
     def get_exception_class(cls):
         return WebsocketException

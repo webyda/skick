@@ -39,11 +39,11 @@ class SimpleMessage(MessageSystemInterface):
         self.shard = address
 
     async def unregister_shard(self, address):
-        """ Unregisters the shard. Nothing remarkable here. """
+        """Unregisters the shard. Nothing remarkable here."""
         self.shard = None
 
     async def send(self, address, message):
-        """ Sends a message to some mailbox. """
+        """Sends a message to some mailbox."""
         if self.send_func:
             return await self.send_func(address, message)
         else:
@@ -81,7 +81,7 @@ class SimpleFactory(MessageSystemFactory):
 
         Previously, we serialized and deserialized the message in order to
         simulate what a remote message system would do. While this technically
-        helps the programmer by providing consistent behavior betwen the 
+        helps the programmer by providing consistent behavior betwen the
         message systems, but it is a little bit wasteful, especially since some
         messages may be serialized and unserialized a number of times before finally
         reaching their destination. Removing one such pass could provide some improvement.

@@ -21,8 +21,8 @@ from .addressing import get_address
 from .front_actor import FrontActor
 from .back_actor import BackActor
 from .syzygy import Syzygy
-        
-        
+
+
 def WebsocketActor(
     socket_interface: WebsocketServerInterface,
     messaging_system: Callable[[], MessageSystemInterface],
@@ -186,11 +186,10 @@ def WebsocketActor(
             await receptionist._monitor({"address": socket_actor.name})
             await session_actor._monitor({"address": socket_actor.name})
             syzygy = Syzygy(receptionist, session_actor, receptionist._socket_task)
-            
+
             syzygies[receptionist.name] = syzygy
             syzygies[session_actor.name] = syzygy
-            
-            
+
             await syzygy.supervise()
         else:
             await socket.send("denied")
@@ -205,7 +204,7 @@ def WebsocketActor(
     running_server = None
 
     async def new_run():
-        """ A method for starting the Websocket actor """
+        """A method for starting the Websocket actor"""
         nonlocal running_server
         await old_run()
         running_server = await sock.serve(socket_handler)
@@ -213,11 +212,11 @@ def WebsocketActor(
     old_stop = socket_actor.stop
 
     async def new_stop():
-        """ A method for stopping the websocket actor """
+        """A method for stopping the websocket actor"""
         running_server.close()
         for name, syzygy in syzygies.items():
             await syzygy.stop()
-            
+
         await old_stop()
 
     socket_actor.run = new_run

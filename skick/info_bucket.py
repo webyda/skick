@@ -104,7 +104,7 @@ class InfoBucket:
         Converts the frozenset keys back to dictionaries to build nice JSON
         friendly objects.
         """
-        
+
         return [
             {"key": dict(k), "timestamp": v[0], "info": v[1]}
             for k, v in self.informations.items()

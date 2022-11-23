@@ -82,10 +82,10 @@ class Skick:
 
         ws_host = kwargs.get("websocket_host", "localhost")
         ws_port = kwargs.get("websocket_port", 8000)
-        
+
         if "websocket_server" in kwargs:
             self.ws_actor = None
-            
+
         else:
 
             ssl_context = kwargs.get("ssl", None)
@@ -160,7 +160,8 @@ class Skick:
             await self.on_start(self.shard)
 
     def start(self):
-        """ Manages the startup process and adds some error handling """
+        """Manages the startup process and adds some error handling"""
+
         def signal_handler():
             self.loop.create_task(self.stop())
 

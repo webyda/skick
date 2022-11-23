@@ -16,9 +16,9 @@ __all__ = [
     "Call",  # A class used to initiate calls to other actors
     "Respond",  # A class used to respond to calls from other actors
     "SocketQuery",  # A class used to query a websocket client
-    "Actor", # The actual actor class, mostly for typing hints
-    "get_address", # A funciton that generates consistent addresses
-    "cluster_data", # A database of cluster information
+    "Actor",  # The actual actor class, mostly for typing hints
+    "get_address",  # A funciton that generates consistent addresses
+    "cluster_data",  # A database of cluster information
 ]
 
 if __name__ == "__main__":

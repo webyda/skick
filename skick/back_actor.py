@@ -9,6 +9,7 @@ from secrets import token_hex
 
 from .actor import Actor
 
+
 class SocketQuery:
     """
     A class for signaling to the syzygy that a conversation between the back
@@ -19,7 +20,7 @@ class SocketQuery:
     def __init__(self, message, subschema):
         self.message = message
         self.subschema = subschema
-        self.cid = None # When we yield a SocketQuery, the Conversation object adds this field.
+        self.cid = None  # When we yield a SocketQuery, the Conversation object adds this field.
 
 
 class BackActor(Actor):
@@ -45,12 +46,12 @@ class BackActor(Actor):
         on those that are schema compliant.
         """
         return self.action(name)
-    
+
     def _default_actions(self):
-        """ Adds an action for receiving SocketQuery replies """
+        """Adds an action for receiving SocketQuery replies"""
         self.action("query_reply")(self._sock_query_handler)
         super()._default_actions()
-        
+
     async def _sock_query_handler(self, message):
         """
         Handles replies to a conversation from a socket to fill a request by
@@ -117,27 +118,32 @@ class BackActor(Actor):
         order, and the final front actor will not match the back actor. This
         bug has occurred in the past.
         """
-        await super().replace(self._replacement_factories[factory], message,
-                              injected_populate=self._replace_populate(factory, message),
-                              injected_cleanse=self._replace_cleanse())
+        await super().replace(
+            self._replacement_factories[factory],
+            message,
+            injected_populate=self._replace_populate(factory, message),
+            injected_cleanse=self._replace_cleanse(),
+        )
 
     async def _create_query(self, cid, query):
         query_id = token_hex()
         self._socket_queries[query_id] = cid
-        await self.send(self.associate,
-                        {
-                            "action": "new_query",
-                            "message": query.message,
-                            "query_id": query_id,
-                            "schema": query.subschema,
-                        })
-        
+        await self.send(
+            self.associate,
+            {
+                "action": "new_query",
+                "message": query.message,
+                "query_id": query_id,
+                "schema": query.subschema,
+            },
+        )
+
     async def _wrap_response(self, reply, conversation):
         if isinstance(reply, SocketQuery):
             await self._create_query(conversation.cid, reply)
         else:
             await super()._wrap_response(reply, conversation)
-            
+
     async def _reply_parser(self, reply):
         """
         This is a slightly ugly hack to allow the session actor to intercept

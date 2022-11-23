@@ -30,11 +30,13 @@ class CombinedMessage(MessageSystemInterface):
         """
         simple_cleanup = await self.SimpleMessage.mailman(actor)
         rabbit_cleanup = await self.RabbitMessage.mailman(actor)
+
         async def ret():
             await simple_cleanup()
             await rabbit_cleanup()
+
         return ret
-    
+
     async def send(self, address: str, message: dict) -> None:
         """
         Sends a message using SimpleMessage if the address is in the
@@ -52,7 +54,7 @@ class CombinedMessage(MessageSystemInterface):
         back to the RabbitMessage version of the method.
         """
         await self.RabbitMessage.register_shard(address)
-        
+
     async def unregister_shard(self, address):
         """
         This method is concerned with inter-shard communication, so it falls

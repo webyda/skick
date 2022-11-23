@@ -15,6 +15,7 @@ class SimpleHash(AbstractHash):
     This way the user can write code that will more or less scale to a cluster
     without any substantial code changes. This is a central goal of Skick.
     """
+
     dictionaries = {}
 
     def __init__(self, name):
@@ -26,15 +27,15 @@ class SimpleHash(AbstractHash):
             pass
 
     async def get(self, key):
-        """ Simply gets the value from the dictionary. """
+        """Simply gets the value from the dictionary."""
         return self.dictionaries[self.name][key]
 
     async def set(self, key, value):
-        """ Simply sets the value in the dictionary. """
+        """Simply sets the value in the dictionary."""
         self.dictionaries[self.name][key] = value
 
     async def delete(self, key):
-        """ Simply deletes the key from the dictionary. """
+        """Simply deletes the key from the dictionary."""
         del self.dictionaries[self.name][key]
 
     async def has_key(self, key):

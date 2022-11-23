@@ -16,7 +16,7 @@ class AbstractHash(ABC):
     conditions on permissibility and impermissibility of keys and table names.
     This is because in important popular backends some characters serve various
     functions. For example, In Redis, we separate tables by using special characters
-    (such as "user:awnns" to denote the key "awnns" in the "user" table), and 
+    (such as "user:awnns" to denote the key "awnns" in the "user" table), and
     this could feasibly be exploited by a malicious user.
 
     The class also provides asynchronous versions of the __getitem__,

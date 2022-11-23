@@ -14,6 +14,7 @@ important data retention step or someting similar.
 """
 import asyncio
 import traceback
+
 switch = []  # Abusing mutability. Please don't tell anyone.
 
 
@@ -40,13 +41,14 @@ def add_stopper(awt, loop):
     keep track of it in a central location. This function allows us to do that.
     This enables us to know which tasks to gather when we want to terminate the
     entire program, and which ones we can simply cancel.
-    
+
     Note to self: Big Boys (tm) don't necessarily check for exceptions where they occur.
     This is because we might be relying on catching them at some other point in the code.
-    
+
     Extra note to self: This function needs to be rewritten, but it sort of works at the moment.
     """
     fut = asyncio.Future(loop=loop)
+
     async def awt_wrapper():
         stopper = loop.create_task(awt)
         waiter = stopper
@@ -68,5 +70,7 @@ async def terminate():
     them (excluding the current task). When all tasks are done, flip the switch
     in the singleton module, signalling that the loop can be stopped safely.
     """
-    await asyncio.gather(*(stopper_tasks - {asyncio.current_task()}), return_exceptions=True)
+    await asyncio.gather(
+        *(stopper_tasks - {asyncio.current_task()}), return_exceptions=True
+    )
     switch[0].set_result(True)

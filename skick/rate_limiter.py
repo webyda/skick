@@ -52,6 +52,7 @@ class TokenBucket(RateLimiter):
     with a "punishment". If they keep taking tokens, their debt will
     reach a maximum debt and the bucket will throw an exception.
     """
+
     def __init__(self, capacity=10.0, fill_rate=2.0, punishment=0.1, max_debt=-10.0):
         super().__init__()
         self.max_debt = max_debt

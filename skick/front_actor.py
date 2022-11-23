@@ -11,6 +11,7 @@ from schema import Schema, Const, Or
 from .actor import Actor
 from .rate_limiter import TokenBucket
 
+
 class FrontActor(Actor):
     """
     A specialized actor class for websocket receptionist actors. These actors
@@ -64,7 +65,7 @@ class FrontActor(Actor):
         self.query_schema("list", [str, int, float, bool])
 
     def query_schema(self, name, schema):
-        """ Registers a schema to be used for some SocketQuery. """
+        """Registers a schema to be used for some SocketQuery."""
         self._query_schemas[name] = Schema(schema)
 
     async def _process_reply(self, message):
@@ -99,22 +100,28 @@ class FrontActor(Actor):
         """
         if message["schema"] in self._query_schemas:
             self._queries[message["query_id"]] = self._query_schemas[message["schema"]]
-            await self.socksend({"message":
+            await self.socksend(
                 {
-                    "action": "SocketQuery",
-                    "query_id": message["query_id"],
-                    "message": message["message"],
-                    "schema": message["schema"],
-                }})
+                    "message": {
+                        "action": "SocketQuery",
+                        "query_id": message["query_id"],
+                        "message": message["message"],
+                        "schema": message["schema"],
+                    }
+                }
+            )
         else:
             self._queries[message["query_id"]] = self._query_schemas["default"]
-            await self.socksend({"message":
+            await self.socksend(
                 {
-                    "action": "SocketQuery",
-                    "query_id": message["query_id"],
-                    "message": message["message"],
-                    "schema": message["schema"],
-                }})
+                    "message": {
+                        "action": "SocketQuery",
+                        "query_id": message["query_id"],
+                        "message": message["message"],
+                        "schema": message["schema"],
+                    }
+                }
+            )
 
     async def replace_from_message(self, message):
         """
@@ -122,9 +129,12 @@ class FrontActor(Actor):
         the replacement therein specified.
         """
         factory = self._replacement_factories[message["factory"]]
-        await self.replace(factory, message["message"],
-                           injected_cleanse=self._replace_cleanse(),
-                           injected_populate=self._replace_populate())
+        await self.replace(
+            factory,
+            message["message"],
+            injected_cleanse=self._replace_cleanse(),
+            injected_populate=self._replace_populate(),
+        )
 
     async def _replace_cleanse(self):
         """
@@ -140,7 +150,7 @@ class FrontActor(Actor):
         websocket specific dictionaries.
         """
         self._default_schemas()
-        
+
     def on_start(self, func):
         """
         We wish to ignore on_start and on_stop reserving them for the back
@@ -211,7 +221,7 @@ class FrontActor(Actor):
         on the websocket that conforms to the schema, then the message is sent
         to the session actor which processes the message in accordance with the
         provided method.
-        
+
         In the FrontActor, this merely records the schema.
         """
 
@@ -231,21 +241,28 @@ class FrontActor(Actor):
         """Listens to the websocket"""
         async for message in self._websocket:
             await self._ws_limiter.waiter()
-            
+
             try:
                 message = loads(message)
             except JSONDecodeError:
-                await self.socksend({"message": {"action": "error", "type": "invalid JSON"}})
+                await self.socksend(
+                    {"message": {"action": "error", "type": "invalid JSON"}}
+                )
             else:
-                
+
                 try:
                     action = message.get("action")
                 except AttributeError:
                     await self.socksend(
-                        {"message": {"action": "error", "type": "Incorrect message format"}}
+                        {
+                            "message": {
+                                "action": "error",
+                                "type": "Incorrect message format",
+                            }
+                        }
                     )
                     continue
-                
+
                 if action:
                     if action in self._socket_schemas:
                         valid = self._socket_schemas[action](message)
@@ -273,10 +290,12 @@ class FrontActor(Actor):
                             }
                         )
                 else:
-                    await self.socksend({"message": {"action": "error", "type": "No action requested"}})
+                    await self.socksend(
+                        {"message": {"action": "error", "type": "No action requested"}}
+                    )
 
     async def run(self):
-        """ Starts the actor and starts listening to the websocket. """
+        """Starts the actor and starts listening to the websocket."""
         await super().run()
         self._socket_task = self.loop.create_task(self.socklistener())
 

@@ -115,7 +115,7 @@ class RabbitMessage(MessageSystemInterface):
         await self.future
         await self.broadcast_ex.declare()
         await self.queue.bind(self.broadcast_ex, address)
-        
+
     async def unregister_shard(self, address):
         """
         Unregisters the shard, preventing it from receiving broadcasts.

@@ -43,7 +43,7 @@ class Actor:
     circumstances, such as when it receives a message or when it is started.
     We could probably phrase this as a version of the builder pattern, but the
     required steps are intended to be collated in special functions that function
-    like factories. In practice the user never directly instantiates an actor. 
+    like factories. In practice the user never directly instantiates an actor.
 
     Actors can hold state. The state is stored separately from the actual actor
     class. While this is not strictly necessary (the user could attach state
@@ -76,14 +76,14 @@ class Actor:
         self._message_task = None
         self._mailman_cleanup = None
         self._message_system = message_system
-        self._shard = shard  
+        self._shard = shard
         self._conversations = {}
 
-        self._main_sentinel = None  
-        self._monitors = set()  
+        self._main_sentinel = None
+        self._monitors = set()
 
-        self._replacement_state = -1  
-        self._init_lock = asyncio.Lock()  
+        self._replacement_state = -1
+        self._init_lock = asyncio.Lock()
 
         self._injected_spawn = None
         self._sentinel_handlers = {}
@@ -115,15 +115,15 @@ class Actor:
             return None
 
     def register_service(self, name):
-        """ Registers the current actor as a service with the given name. """
+        """Registers the current actor as a service with the given name."""
         cluster_data.add_service(name, self.name)
-        
+
     def unregister_services(self):
-        """ Unregisters all services this actor provides. """
+        """Unregisters all services this actor provides."""
         cluster_data.delete_service(self.name)
 
     def sentinel_handler(self, address, handler):
-        """ Registers a handler for a sentinel message """
+        """Registers a handler for a sentinel message"""
         self._sentinel_handlers[address] = handler
 
     def default_sentinel(self, handler):
@@ -174,11 +174,11 @@ class Actor:
             # N.B: We may also receive SocketQueries here, and other exotic
             # objects. We need to handle this separately. Until we are ready to rip the whole system out,
             # we will simply use inheritance to allow us to handle this case.
-            
+
             response = await generator.__anext__()
             response.cid = conversation.cid
             await self._wrap_response(response, conversation)
-            
+
     async def _wrap_response(self, response, conversation):
         await self.send(
             conversation.partner,
@@ -189,7 +189,7 @@ class Actor:
                 "message": response,
             },
         )
-        
+
     async def _process_reply(self, message: dict) -> None:
         """
         This method interfaces with the conversation object. It ensures that
@@ -204,7 +204,7 @@ class Actor:
             await self._reply_parser(reply)
 
     async def _reply_parser(self, reply):
-        """ A small helper for parsing incoming replies """
+        """A small helper for parsing incoming replies"""
         if reply:
             (destination, reply) = reply
             await self.send(destination, reply)
@@ -239,7 +239,7 @@ class Actor:
         """
         while True:
             message = await self.queue.get()
-            
+
             action = message.get("action", None)
             if action == "done":
                 break
@@ -275,7 +275,7 @@ class Actor:
         to be executed when a particular type of message is received. The
         "behavior" is simply an async function that we register in the appropriate
         field in the instance.
-        
+
         It automatically detects whether func is an async function, in which case
         the method is a regular action, or whether it is an asynchronous
         generator, in which case we are dealing with a conversation type action.
@@ -336,7 +336,7 @@ class Actor:
            die with it. This is the default behavior.
         2. Restart: If the daemon terminates, it will be restarted.
         3. Ignore: Do nothing
-        
+
         Additionally we may supply a *callback*. If the daemon terminates, the
         on_failure method will be called if it was supplied to the decorator.
         This happens regardless of the behavior chosen.
@@ -434,7 +434,7 @@ class Actor:
                 monitors = None
         else:
             monitors = None
-            
+
         if self._injected_spawn:
             return await self._injected_spawn(
                 factory, message=message, remote=remote, name=name, monitors=monitors
@@ -443,7 +443,7 @@ class Actor:
             raise RuntimeError(f"No spawn function has been injected into {self.name}")
 
     def _start_daemons(self):
-        """ Starts all daemons registered with the actor. """
+        """Starts all daemons registered with the actor."""
         daemon_pairs = zip(self._daemons.items(), self._daemon_watchers.items())
         for (name, daemon), (_, watcher) in daemon_pairs:
             self._daemon_tasks[name] = self.loop.create_task(daemon())
@@ -453,7 +453,7 @@ class Actor:
                 self._daemon_watchers[name] = None
 
     def _stop_daemons(self):
-        """ Stops all daemons registered with the actor. """
+        """Stops all daemons registered with the actor."""
         current = asyncio.current_task()
         for (name, watcher) in self._daemon_watchers.items():
             if watcher:
@@ -467,12 +467,16 @@ class Actor:
         return current
 
     async def _replace(
-        self, factory: Callable[["Actor", dict], Awaitable[None]], message: dict, injected_cleanse = None, injected_populate = None
+        self,
+        factory: Callable[["Actor", dict], Awaitable[None]],
+        message: dict,
+        injected_cleanse=None,
+        injected_populate=None,
     ) -> None:
         """
         Replaces the current actor's behaviors with another. Also replaces
         the state encapsulating closure. It does this by running the factory
-        function of the new actor after having cleared the _actions dict and 
+        function of the new actor after having cleared the _actions dict and
         some other internal dictionaries.
 
         The replacement operation is somewhat problematic. This is because it
@@ -508,12 +512,12 @@ class Actor:
         async with self._init_lock:
             self._replacement_state = 0
             self._actions.clear()
-            
+
             if injected_cleanse:
                 await injected_cleanse
             if injected_populate:
                 await injected_populate
-                
+
             self._default_actions()
 
             task = self._stop_daemons()
@@ -566,7 +570,9 @@ class Actor:
         if is_daemon:
             task.cancel()
 
-    async def replace(self, factory, message, injected_cleanse=None, injected_populate=None):
+    async def replace(
+        self, factory, message, injected_cleanse=None, injected_populate=None
+    ):
         """
         Replaces an actor with the specified actor type. See actor._replace for
         details.
@@ -575,9 +581,14 @@ class Actor:
         a daemon. With this mechanism, the daemon can avoid breaking the actor
         when performing replacements.
         """
-        shielded_task = asyncio.shield(self._replace(factory, message,
-                                                     injected_cleanse=injected_cleanse,
-                                                     injected_populate=injected_populate))
+        shielded_task = asyncio.shield(
+            self._replace(
+                factory,
+                message,
+                injected_cleanse=injected_cleanse,
+                injected_populate=injected_populate,
+            )
+        )
         await shielded_task
 
     async def mailman(self) -> None:
@@ -628,7 +639,7 @@ class Actor:
         """Kills the actor and cleans up"""
         if self._message_task:
             self._message_task.cancel()
-        
+
         self._stop_daemons()
 
         if self._on_stop:
@@ -663,6 +674,7 @@ class Actor:
         Spawns a task to watch over another task and report to its monitors when the
         task is finished.
         """
+
         async def reporter():
             await asyncio.gather(task, return_exceptions=True)
 
@@ -716,9 +728,9 @@ class Actor:
         """
         An action for adding a monitor to the actor. A different actor can
         send us a message following the schema:
-        
+
         {"action": "monitor", "address": [address of caller]}
-        
+
         The actor will then remember to notify the requesting party when it
         dies.
         """

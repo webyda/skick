@@ -67,5 +67,5 @@ class RedisHash(AbstractHash):
 
     @prohibit_keys
     async def has_key(self, key):
-        """ Checks whether a given key exists in the table. """
+        """Checks whether a given key exists in the table."""
         return (await self.redis.exists(f"{self.name}:{key}")) > 0

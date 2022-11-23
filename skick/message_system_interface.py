@@ -24,13 +24,14 @@ class MessageSystemInterface(ABC):
         This method must provide a means to send a message to the actor at the
         address specified.
         """
+
     @abstractmethod
     async def unregister_shard(self, address: str) -> None:
         """
         This method must provide a means to unregister a shard from the
         messaging system.
         """
-        
+
     @abstractmethod
     async def register_shard(self, address):
         """
