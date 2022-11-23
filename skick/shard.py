@@ -57,6 +57,7 @@ def shard(
             try:
                 await shard_actor._message_task
             except Exception as e:
+                print(print_exc())
                 print(f"Shard {shard_actor.name} died with exception {e}")
                 await shard_actor.stop()
 
@@ -403,7 +404,7 @@ def shard(
             if addr in actors:
                 del actors[addr]
 
-            await cluster_data.delete_service(addr)
+            cluster_data.delete_service(addr)
         else:
             pass
 

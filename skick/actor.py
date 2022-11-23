@@ -1,9 +1,8 @@
 """
-This module contains a base class for actors. This is the fundamental building
-block of Skick, and is the fundamental unit of computation in actor models. 
+This module contains a class for actors. This is the fundamental building
+block of Skick, and is the fundamental unit of computation in actor models.
 """
 import asyncio
-import traceback
 from typing import Callable, Awaitable, Any
 from inspect import isasyncgenfunction
 from random import choice
@@ -11,7 +10,6 @@ from random import choice
 from schema import Schema
 
 from .message_system_interface import MessageSystemInterface
-from .conversation import Call, Respond
 from .cluster import cluster_data
 from . import terminate
 
@@ -101,15 +99,15 @@ class Actor:
             match local:
                 case "mixed":
                     return choice(
-                        cluster_data.local_services.get(name, None)
-                        or cluster_data.remote_services.get(name, None)
+                        list(cluster_data.local_services.get(name, None))
+                        or list(cluster_data.remote_services.get(name, None))
                     )
 
                 case "local":
-                    return choice(cluster_data.local_services.get(name, None))
+                    return choice(list(cluster_data.local_services.get(name, None)))
 
                 case "remote":
-                    return choice(cluster_data.remote_services.get(name, None))
+                    return choice(list(cluster_data.remote_services.get(name, None)))
 
                 case _:
                     return None
@@ -119,7 +117,7 @@ class Actor:
     def register_service(self, name):
         """ Registers the current actor as a service with the given name. """
         cluster_data.add_service(name, self.name)
-
+        
     def unregister_services(self):
         """ Unregisters all services this actor provides. """
         cluster_data.delete_service(self.name)
@@ -151,12 +149,12 @@ class Actor:
         elif self._default_sentinel:
             await self._default_sentinel(message)
         else:
-            print("No sentinel handler registered.")
+            pass
 
     async def _start_conversation(self, generator):
         """
         This method is invoked when an action indicates that it is in fact
-        a conversation type action. It then returns anm async generator, the first
+        a conversation type action. It then returns an async generator, the first
         element of which is a Conversation object, which contains the necessary
         information to manage the conversation. We simply store it in the
         _conversations dictionary after having performed some initial setup.
@@ -173,18 +171,25 @@ class Actor:
             # In this case, we are dealing with a respond action, where the
             # actor is expecting to deliver the first reply. In this case, we
             # simply need to reiterate as the message will come later.
+            # N.B: We may also receive SocketQueries here, and other exotic
+            # objects. We need to handle this separately. Until we are ready to rip the whole system out,
+            # we will simply use inheritance to allow us to handle this case.
             
             response = await generator.__anext__()
-            await self.send(
-                conversation.partner,
-                {
-                    "action": "receive_reply",
-                    "cid": conversation.cid,
-                    "sender": self.name,
-                    "message": response,
-                },
-            )
+            response.cid = conversation.cid
+            await self._wrap_response(response, conversation)
             
+    async def _wrap_response(self, response, conversation):
+        await self.send(
+            conversation.partner,
+            {
+                "action": "receive_reply",
+                "cid": conversation.cid,
+                "sender": self.name,
+                "message": response,
+            },
+        )
+        
     async def _process_reply(self, message: dict) -> None:
         """
         This method interfaces with the conversation object. It ensures that
@@ -234,18 +239,20 @@ class Actor:
         """
         while True:
             message = await self.queue.get()
-            if message["action"] == "done":
+            
+            action = message.get("action", None)
+            if action == "done":
                 break
-            if message["action"] in self._actions:
-                await self._actions[message["action"]](message)
+            if action in self._actions:
+                await self._actions[action](message)
 
-            elif message["action"] in self._conversation_prototypes:
-                generator = self._conversation_prototypes[message["action"]](message)
+            elif action in self._conversation_prototypes:
+                generator = self._conversation_prototypes[action](message)
                 if generator:
                     await self._start_conversation(generator)
                 else:
                     pass
-            elif message["action"] in ["receive_reply", "end_conversation"]:
+            elif action in ["receive_reply", "end_conversation"]:
                 if message["cid"] in self._conversations:
                     await self._process_reply(message)
                 else:
@@ -427,27 +434,13 @@ class Actor:
                 monitors = None
         else:
             monitors = None
-
+            
         if self._injected_spawn:
             return await self._injected_spawn(
                 factory, message=message, remote=remote, name=name, monitors=monitors
             )
         else:
             raise RuntimeError(f"No spawn function has been injected into {self.name}")
-
-    async def _replace_cleanse(self):
-        """
-        Allows subclasses to perform any necessary cleanup in the replace method
-        while still being protected by the lock.
-        """
-        pass
-
-    async def _replace_populate(self):
-        """
-        Allows subclasses to populate various attributes in the replace method
-        while still being protected by the lock.
-        """
-        pass
 
     def _start_daemons(self):
         """ Starts all daemons registered with the actor. """
@@ -474,7 +467,7 @@ class Actor:
         return current
 
     async def _replace(
-        self, factory: Callable[["Actor", dict], Awaitable[None]], message: dict
+        self, factory: Callable[["Actor", dict], Awaitable[None]], message: dict, injected_cleanse = None, injected_populate = None
     ) -> None:
         """
         Replaces the current actor's behaviors with another. Also replaces
@@ -515,8 +508,12 @@ class Actor:
         async with self._init_lock:
             self._replacement_state = 0
             self._actions.clear()
-            await self._replace_cleanse()
-            await self._replace_populate()
+            
+            if injected_cleanse:
+                await injected_cleanse
+            if injected_populate:
+                await injected_populate
+                
             self._default_actions()
 
             task = self._stop_daemons()
@@ -569,7 +566,7 @@ class Actor:
         if is_daemon:
             task.cancel()
 
-    async def replace(self, factory, message):
+    async def replace(self, factory, message, injected_cleanse=None, injected_populate=None):
         """
         Replaces an actor with the specified actor type. See actor._replace for
         details.
@@ -578,7 +575,9 @@ class Actor:
         a daemon. With this mechanism, the daemon can avoid breaking the actor
         when performing replacements.
         """
-        shielded_task = asyncio.shield(self._replace(factory, message))
+        shielded_task = asyncio.shield(self._replace(factory, message,
+                                                     injected_cleanse=injected_cleanse,
+                                                     injected_populate=injected_populate))
         await shielded_task
 
     async def mailman(self) -> None:
@@ -616,7 +615,7 @@ class Actor:
         self._default_actions()
         self._message_task = self.loop.create_task(self._process_messages())
 
-        self._main_sentinel = await self._sentinel(
+        self._main_sentinel = self._sentinel(
             self._message_task,
             self._monitors,
             "main_task",
@@ -629,7 +628,7 @@ class Actor:
         """Kills the actor and cleans up"""
         if self._message_task:
             self._message_task.cancel()
-
+        
         self._stop_daemons()
 
         if self._on_stop:
@@ -644,16 +643,13 @@ class Actor:
         with the terminate singleton. This is necessary because we may need
         to perform the stop when terminating the shard. If so, we need to know
         be able to ensure that the actors get a chance to run their on_stop
-        methods.
+        methods before we terminate the shard.
         """
-        try:
-            if not self.stopped:
-                self.stopped = terminate.add_stopper(self._stop(), self.loop)
-            await self.stopped
-        except:
-            print(traceback.print_exc)
+        if not self.stopped:
+            fut, self.stopped = terminate.add_stopper(self._stop(), self.loop)
+            await fut
 
-    async def _sentinel(
+    def _sentinel(
         self,
         task,
         monitors,
@@ -667,17 +663,13 @@ class Actor:
         Spawns a task to watch over another task and report to its monitors when the
         task is finished.
         """
-
         async def reporter():
-            try:
-                await task
-                if stop:
-                    await self.stop()
-                else:
-                    pass
-            except BaseException as e:
-                print(traceback.format_exc())
-                # print(f"Exception: {e}")
+            await asyncio.gather(task, return_exceptions=True)
+
+            if stop:
+                await self.stop()
+            else:
+                pass
             if task.cancelled():
                 if cancellations:
                     for monitor in monitors:

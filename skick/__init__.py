@@ -5,7 +5,7 @@ Skick, an actor framework for Python 3.10+
 from .skick import Skick
 from .directory import Directory
 from .conversation import Call, Respond
-from .websocket_actor import SocketQuery
+from .back_actor import SocketQuery
 from .actor import Actor
 from .addressing import get_address
 from .cluster import cluster_data

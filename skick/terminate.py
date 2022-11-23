@@ -13,7 +13,7 @@ have to be the last task to finish and we do not risk cutting off some
 important data retention step or someting similar.
 """
 import asyncio
-
+import traceback
 switch = []  # Abusing mutability. Please don't tell anyone.
 
 
@@ -37,27 +37,29 @@ stopper_tasks = set()
 def add_stopper(awt, loop):
     """
     When an actor or some other component has a "stopper" method, we wish to
-    keep track of it in a central location. This function allows us to do that,
-    by wrapping the awaitable in a coroutine that creates another task that
-    creates an inner task for the awaitable, adds it to a set, and then removes
-    it on completion. This way, we have a centralized list of all "stopper"
-    tasks we need to await before we allow the event loop to terminate, but
-    we also have someting of a headache because of the deeply nested set of
-    tasks. This is the price we pay for a clean shutdown with the present
-    architecture.
+    keep track of it in a central location. This function allows us to do that.
+    This enables us to know which tasks to gather when we want to terminate the
+    entire program, and which ones we can simply cancel.
+    
+    Note to self: Big Boys (tm) don't necessarily check for exceptions where they occur.
+    This is because we might be relying on catching them at some other point in the code.
+    
+    Extra note to self: This function needs to be rewritten, but it sort of works at the moment.
     """
-
+    fut = asyncio.Future(loop=loop)
     async def awt_wrapper():
         stopper = loop.create_task(awt)
+        waiter = stopper
         stopper_tasks.add(stopper)
         try:
             await stopper
-        except:  # This is the end of the world, so we can afford to be sloppy
-            pass
-        stopper_tasks.remove(stopper)
+        finally:
+            stopper_tasks.remove(stopper)
+            if not fut.done():
+                fut.set_result(True)
 
     stopper = loop.create_task(awt_wrapper())
-    return stopper
+    return fut, stopper
 
 
 async def terminate():
@@ -66,5 +68,5 @@ async def terminate():
     them (excluding the current task). When all tasks are done, flip the switch
     in the singleton module, signalling that the loop can be stopped safely.
     """
-    await asyncio.gather(*(stopper_tasks - {asyncio.current_task()}))
+    await asyncio.gather(*(stopper_tasks - {asyncio.current_task()}), return_exceptions=True)
     switch[0].set_result(True)
