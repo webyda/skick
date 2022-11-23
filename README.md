@@ -336,7 +336,8 @@ If a websocket server has been requested, a special Websocket Actor will be inst
 collection of websocket handlers called *sessions* and *subsessions* as well as so called *handshake sequences*.
 These are abstractions of lower level actor functionality, to which websocket connections have been affixed.
 the exact details are complicated enough to warrant their own chapter, but these special actors live in their own
-universe, which is managed by the websocket actor.
+universe, which is managed by the websocket actor. The Websocket actor also ensures
+that the actors associated with the connection live and die together, and that they are both stopped when the connection terminates.
 
 ## The Session and the Subsession
 In the previous sections, we discussed features that live, so to speak,
@@ -608,6 +609,18 @@ field of the original message throughout the sequence. Ultimately, the final act
 in the sequence should replace itself with the `f"{message['session_type']}:final"`
 actor, handing control over to the subsession in question.
 
+### Session termination
+Since sessions are not normal actors, they are terminated in a slightly different fashion than normal actors. If you invoke the `inst.stop` method on the `BackActor`,
+the `WebsocketActor` will make sure to close the connection and stop the `FrontActor`.
+
+This works because the `FrontActor`, `BackActor` and the consumer task in the `FrontActor` are collated in a special `Syzygy` object by the `WebsocketActor`.
+If any of the three fail, the `Syzygy` provides methods for also shutting down the other two.
+
+An element of caution is required when it comes to these Syzygies. While the
+consumer task is directly monitored by the `WebsocketActor`, and while the stop
+methods are invoked directly without involving messaging, the `WebsocketActor` is informed of the demise of the actors in the `Syzygy` through the sentinel message it
+*should* emit. This may prove unreliable on some occasions, and we *might* see situations where only one of the actors is actually alive. We may also experience ill defined states when the sentinel messages are in transition.
+
 ## Clustering
 Skick has the ability to run on many shards in a cluster. If this is required for your application, then you must have some supported messaging system configured in your back end, since Skick does not supply its own distributed messaging system.
 
@@ -710,7 +723,10 @@ There are a few ways to trigger the sentinel. Under the hood, it awaits the mess
 2. Any exception arising inside a message handler will cause an `"exception"` message.
 3. Any daemon marked as a `dead_mans_hand` daemon, will cancel the message processing task, leading to a `"cancellation"` message
    *even if it was stopped by an exception*.
-4. If the websocket consumer task in a `FrontActor` dies, it will send a sentinel message to the `BackActor`, in which the `tag` field differs from normal sentinel actions.
+4. If the websocket consumer task in a `FrontActor` dies, the `WebsocketActor`
+   will sense that this has happened. It will directly invoke the stop methods of
+   both the actors associated with the connection, and both of them will send
+   cancellation messages.
 
 ## Miscellaneous Features
 ### Hashes
