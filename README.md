@@ -91,15 +91,15 @@ creation process proceeds in the following steps:
 
 1. The shard actor creates an Actor object.
 2. The shard actor runs the actor's declarative function on the actor object.
-3. The function stores the actor's state in its closure, and registers message
+3. The function stores the actor's state in the closures of the functions defined within, and registers message
    handlers (behaviors in actor terminology), daemons and other necessary
    methods.
 4. The actor runs the on_start method if one has been registered.
-5. The actor starts separate task for the daemons (be careful of race
+5. The actor starts separate tasks for the daemons (be careful of race
    conditions).
 6. The actor starts the message processing loop in the main task.
 
-In practice, defining actors is done through the actor method in some Skick instance
+In practice, defining actors is done through the `actor` method in some Skick instance
 ```python
 @skick.actor(actor_name)
 def function_name(actor_instance, init_message):
@@ -190,12 +190,12 @@ There are a number of helpful methods in the actor instance.
 Actors that have been defined in the manner described above are not
 automatically instantiated. They have to be requested somewhere in the program.
 Apart from being spawned as a response to user connections in the session system,
-there is a simple mechanism for spawning actors when starting the shard actor.
+shards may be spawned by any actor using the `spawn` method. In order to spawn
+actors when the shard starts up, the user can define an `on_start` method. 
 
-When the skick instance is initiated we can optionally supply an asynchronous
-method as an argument, which will be run when the system starts, and which will
-be supplied with a direct reference to the shard instance. We can use this to
-spawn actors and kick start the system.
+This method is scheduled to run when the shard starts up and is supplied with a
+direct reference to the shard actor, so that we may use it to spawn more actors
+as shown in the example below:
 
 ```python
 from skick import Skick
@@ -211,7 +211,7 @@ skick.start()
 ```
 
 ### Conversations
-Often actors have to communicate back and forth in specific sequences. This may
+Often, actors have to communicate back and forth in specific sequences. This may
 be as simple as actor A asking actor B what the value of some variable is.
 With the basic messaging functionality we have to solve this problem through a
 combination of complicated state management, replacement and defining receiving
@@ -220,7 +220,7 @@ and sending actions in separate methods.
 This is *too* inconvenient in many situations. For this reason, Skick provides
 an alternative out of the box called a *conversation*. A conversation takes
 place between two actors, one caller and one responder. These take turns in passing
-messages to each other in a call and response fashion.
+messages to eachother in a call and response fashion.
 
 In a conversation in Skick, the actions involved are not normal asynchronous
 functions, but asynchronous generator functions. Messages are sent and received 
@@ -232,6 +232,13 @@ new tally whenever it received an "add" request. We could rewrite the action as
 a conversation in the following manner.
 
 ```python
+
+...
+
+from skick import Skick, Respond
+
+...
+
 @skick.actor("accumulator")
 def accumulator(inst, message):
     """ An actor that adds numbers to an internal tally. """
@@ -256,6 +263,12 @@ def accumulator(inst, message):
 In the corresponding caller, another asynchronous generator is found:
 
 ```python
+...
+
+from skick import Skick, Call
+
+...
+
 @skick.actor("caller")
 def caller(inst, message):
 
@@ -322,26 +335,26 @@ helpful jobs for the actors.
    actors can add themselves if they provide a service to other actors and from
    which actors can request addresses to service providers.
 3. If there are several shards in the cluster, it will communicate with the other
-   shards to ensure it has up to date information about which services are available
-   on the other actors, as well as telling the other actors which services it provides.
+   shards to ensure it has up to date information about which services and actor types are available
+   on the other shards, as well as telling the other shards which services and actor types it provides.
 4. It helps spawn actors
 
 Most of these functions are not exposed to the user through the actual shard actor object.
-Instead, the shard injects helpers into all actors so that they can be accessed through the
-shard instance. Actors can also be spawned by sending a message to the shard, but this is
+Instead, the shard injects helpers into all actors so that they can be accessed through any Actor instance.
+Actors can also be spawned by sending a message to the shard, but this is
 primarily meant for spawning shards remotely.
 
-### The Websocket Actor
-If a websocket server has been requested, a special Websocket Actor will be instantiated. It maintains its own
+### The WebsocketActor
+If a websocket server has been requested, a special `WebsocketActor` will be instantiated. It maintains its own
 collection of websocket handlers called *sessions* and *subsessions* as well as so called *handshake sequences*.
-These are abstractions of lower level actor functionality, to which websocket connections have been affixed.
-the exact details are complicated enough to warrant their own chapter, but these special actors live in their own
-universe, which is managed by the websocket actor. The Websocket actor also ensures
+These are abstractions of lower level actors, to which websocket connections have been affixed.
+The exact details are complicated enough to warrant their own chapter, but these special actors live in their own
+universe, which is managed by the `WebsocketActor`. The `WebsocketActor` also ensures
 that the actors associated with the connection live and die together, and that they are both stopped when the connection terminates.
 
 ## The Session and the Subsession
 In the previous sections, we discussed features that live, so to speak,
-inside the clean room that your back end should be. However, for our back end to
+inside the clean room that your backend should be. However, for our backend to
 be useful for anything, it has to be able to communicate with the outside world.
 Most importantly, it has to be able to communicate with clients over the internet.
 Skick's main method for this is to use *websockets*. Websockets allow bidirectional
@@ -395,7 +408,7 @@ They *target* the `BackActor` since it is the actual main actor of the session.
 As for the `@inst.socket` decorator, it reverts to an `@inst.action` decorator
 ignoring the schema entirely.
 
-Manyer methods have these dual interpretations. The `@inst.socksend` method,
+Many methods have these dual interpretations. The `inst.socksend` method,
 which only exists on these special websocket actors, sends a message to the
 websocket client when it is called on the `FrontActor`, but if it is called in
 the `BackActor`, it encapsulates the message in an action that asks the `FrontActor` to
@@ -413,7 +426,7 @@ When a client requests a new websocket connection, the following steps are follo
 3. The same `session` definition function is run twice. Once on the FrontActor
    and once on the BackActor function.
 4. The websocket actor coordinates these two actors by directly injecting references
-   to things like the websocket connection and the other actor in the pair, into
+   to things like the websocket connection and the other actor in the pair into
    the actor objects.
 5. The actors are both started in their own separate tasks.
 
@@ -478,7 +491,7 @@ or have had their functionalities altered
 
 ### Specifics About the BackActor's Methods
 Like in the case of the `FrontActor`, the `BackActor` inherits all decorators and
-methods from the `Actor` class. Some of them function as normally, and some have
+methods from the `Actor` class. Some of them function as usual, and some have
 had their behaviors altered. In addition to this, all the methods defined on the 
 `FrontActor` also exist on the `BackActor` but many of them do nothing. 
 
@@ -511,7 +524,7 @@ The conversation in the `BackActor` will resume once the websocket client has se
 Because the `FrontActor` is unable to read function bodies, the subschemas
 can not be specified within the handler requesting the conversation.
 Instead, subschemas must created in the session declaration's direct scope
-using the decorator `@inst.query_schema`. This is highly inconvenient, so
+using the function `inst.query_schema`. This is highly inconvenient, so
 a number of simple schemas have been predefined for the programmers's convenience, namely:
 
 1. `"default"` which accepts an `int`, `float`, `str` or `bool`
@@ -616,13 +629,13 @@ the `WebsocketActor` will make sure to close the connection and stop the `FrontA
 This works because the `FrontActor`, `BackActor` and the consumer task in the `FrontActor` are collated in a special `Syzygy` object by the `WebsocketActor`.
 If any of the three fail, the `Syzygy` provides methods for also shutting down the other two.
 
-An element of caution is required when it comes to these Syzygies. While the
+A word of caution is appropriate when it comes to these syzygies. While the
 consumer task is directly monitored by the `WebsocketActor`, and while the stop
 methods are invoked directly without involving messaging, the `WebsocketActor` is informed of the demise of the actors in the `Syzygy` through the sentinel message it
 *should* emit. This may prove unreliable on some occasions, and we *might* see situations where only one of the actors is actually alive. We may also experience ill defined states when the sentinel messages are in transition.
 
 ## Clustering
-Skick has the ability to run on many shards in a cluster. If this is required for your application, then you must have some supported messaging system configured in your back end, since Skick does not supply its own distributed messaging system.
+Skick has the ability to run on many shards in a cluster. If this is required in your application, then you must provide some supported messaging system in your backend, since Skick does not supply its own distributed messaging system.
 
 At present, Skick relies on RabbitMQ for its inter-shard communication. If you have
 an unencrypted RabbitMQ service hidden behind a firewall, you may swap
@@ -684,8 +697,9 @@ it is very easy to see how actors could be lost and forgotten, leading to memory
 Most actor systems use some sort of system for supervising actors for this reason. In Skick, the supervision is carried out by *sentinels*, tasks that monitor other tasks. If they detect a cancellation, exception or a task being marked as done, they will report this to the actor's *monitors*. Monitors are other actors that have told the supervised actor that they wish to be notified.
 
 ### Registering as a Monitor
-When an actor is spawned, we may supply the `inst.spawn` function with a list of addresses under the optional `monitors` keyword argument.
-if we do, then the shard will automatically assign the listed actors as monitors and have the sentinel task report to them. We may also
+When an actor is spawned, we may supply the `inst.spawn` function with a list of addresses under the optional `add_monitors` keyword argument. By default, the actor that spawns a subactor will be added as a monitor together with the `Shard` special actor. If you do not wish to only add the `Shard` actor, you may set `add_monitors` to `False`. If you opt to add extra monitors via the `add_monitors` argument, you will have to also include the spawning actor manually.
+
+If we supply a list of monitors, then the shard will automatically assign the listed actors as monitors and have the sentinel task report to them. We may also
 request to monitor a running actor by sending it a request over the message system. The message must follow the format
 ```python
 {"action": "monitor", "address": address_to_report_to}
@@ -693,7 +707,7 @@ request to monitor a running actor by sending it a request over the message syst
 and will receive updates just the same as if it had been added when the actor was spawned.
 
 ### Receiving Notifications
-When an actor ceases to operate (that it stops processing messages), the sentinel task will produce a message depending on
+When an actor ceases to operate (stops processing messages), the sentinel task will produce a message the contents of which depends on
 how this came to be. The message will follow the schema
 ```python
 {
@@ -715,13 +729,13 @@ Alternatively, you can override the default behavior by defining an `@inst.actio
 
 ### Out of the Box Sentinels
 The shard actor will always keep a lookout for any actor it has spawned so that it can remove the instance from its internal registries and have it be garbage collected.
-The websocket actor will always supervise all front- and back- actors to ensure they get get removed in a similar fashion. Additionally, both actors in a syzygy will notify eachother of their demise.
+The websocket actor will always supervise all `FrontActor`s and `BackActors` to ensure they get removed in a similar fashion.
 
 ### What Triggers the Sentinel
 There are a few ways to trigger the sentinel. Under the hood, it awaits the message processing task. This means:
 1. Any action that cancels the actor, such as invoking the `inst.stop` method, will produce a `"cancellation"` message.
 2. Any exception arising inside a message handler will cause an `"exception"` message.
-3. Any daemon marked as a `dead_mans_hand` daemon, will cancel the message processing task, leading to a `"cancellation"` message
+3. Any daemon marked as a `dead_mans_hand` daemon, will cancel the message processing task if it terminates, leading to a `"cancellation"` message
    *even if it was stopped by an exception*.
 4. If the websocket consumer task in a `FrontActor` dies, the `WebsocketActor`
    will sense that this has happened. It will directly invoke the stop methods of
@@ -804,8 +818,8 @@ applications, we want to distribute the code over multiple semi independent modu
 In Skick, there is a similar mechanism called a `Directory`. They act as proxy objects for the main `Skick` object. We can attach actors, sessions and handshakes to a `Directory`, import the `Directory` in the main module, and then
 attach them to the main `Skick` object using the `skick.add_directory(directory)` method.
 
-For example, suppose there is a submodule a.py. We define an actor there and
-use the Directory class to transfer it to the main.py file.
+For example, suppose there is a submodule `a.py`. We define an actor there and
+use the Directory class to transfer it to the `main.py` file.
 
 ```python
 #a.py
