@@ -8,12 +8,27 @@ Instead, it provides a simple interface which, for unencrypted single core
 instances, requires no parameters.
 """
 
+
 import asyncio
 from ssl import create_default_context, Purpose
-from signal import SIGTERM, SIGINT
 
-import uvloop
 
+# There are two platform dependent details in this module.
+# 1. The uvloop module is not available on Windows, so the user must
+#    run the standard asyncio event loop instead.
+# 2. Signals do not exist on Windows and loop.add_signal_handler() is not
+#    available. Instead, we rely on python's emulated verison in signal.signal
+from platform import system
+if system() != "Windows":
+    from signal import SIGINT, SIGTERM, SIGHUP
+    SIGNALS = [SIGINT, SIGTERM, SIGHUP]
+    import uvloop
+    new_event_loop = uvloop.new_event_loop
+else:
+    from signal import SIGINT, SIGTERM, signal
+    SIGNALS = [SIGINT, SIGTERM]
+    new_event_loop = asyncio.new_event_loop
+    
 from .addressing import get_address
 
 # Import the messaging system interfaces
@@ -53,7 +68,7 @@ class Skick:
         else:
             self.on_stop = None
 
-        self.loop = uvloop.new_event_loop()
+        self.loop = new_event_loop()
         asyncio.set_event_loop(self.loop)
         self.switch = terminate.set_loop(self.loop)
 
@@ -162,14 +177,20 @@ class Skick:
     def start(self):
         """Manages the startup process and adds some error handling"""
 
-        def signal_handler():
+        def signal_handler(*args):
             self.loop.create_task(self.stop())
 
-        self.loop.add_signal_handler(SIGTERM, signal_handler)
-        self.loop.add_signal_handler(SIGINT, signal_handler)
-        self.loop.create_task(self._run())
-        self.loop.run_until_complete(self.switch)
-
+        if system() != "Windows":
+            for sig in SIGNALS:
+                self.loop.add_signal_handler(sig, signal_handler)
+            self.loop.create_task(self._run())
+            self.loop.run_until_complete(self.switch)
+        else:
+            for sig in SIGNALS:
+                signal(sig, signal_handler)
+            self.loop.create_task(self._run())
+            self.loop.run_until_complete(self.switch)
+            
     async def stop(self):
         """Allows us to stop the actor system"""
         if self.on_stop:

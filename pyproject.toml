@@ -35,9 +35,9 @@ dependencies = [
   "websockets >=10",
   "redis >=4",
   "orjson >=3",
-  "uvloop >=0.16",
+  "uvloop >=0.16; platform_system!='Windows'",
   ]
-version = "0.0.1a0.dev0"
+version = "0.0.1a0.dev1"
 [project.urls]
 Documentation = "https://github.com/webyda/skick#readme"
 Issues = "https://github.com/webyda/skick/issues"
